@@ -1,0 +1,22 @@
+.root {
+  width: 100%;
+  height: 100vh;
+  min-width: 1080px;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg);
+  overflow: hidden;
+  user-select: none;
+}
+
+.dragging,
+.dragging * {
+  cursor: col-resize !important;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}

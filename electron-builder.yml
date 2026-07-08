@@ -1,0 +1,13 @@
+appId: com.empirepod.app
+productName: Empire Pod
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+mac:
+  icon: build/icon.icns
+  category: public.app-category.entertainment
+  target:
+    - target: dir

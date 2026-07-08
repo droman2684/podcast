@@ -1,0 +1,134 @@
+.sidebar {
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border-strong);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.logoRow {
+  padding: 20px 18px 16px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+}
+
+.logoMark {
+  width: 32px;
+  height: 32px;
+  background: var(--color-brand);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.wordmark {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  letter-spacing: -0.4px;
+}
+
+.section {
+  padding: 10px 14px 8px;
+  flex-shrink: 0;
+}
+
+.sectionLabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-placeholder);
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.subscriptionsHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.subscriptionsHeader .sectionLabel {
+  margin-bottom: 0;
+}
+
+.exportBtn {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.exportBtn:hover {
+  background: var(--color-border-strong);
+}
+
+.navList {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.subscriptions {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 14px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.subRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.subName {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subBadge {
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--color-accent);
+  border-radius: 8px;
+  padding: 1px 6px;
+  flex-shrink: 0;
+}
+
+.unsubBtn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.1s;
+  cursor: pointer;
+}
+.unsubBtn:hover {
+  background: var(--color-border-strong);
+}
+.subRow:hover .unsubBtn {
+  opacity: 1;
+}

@@ -1,0 +1,238 @@
+.overlay {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--color-bg);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+}
+
+.topBar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+}
+
+.minimizeBtn {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.topLabel {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+}
+
+.scrollArea {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: 0 24px 40px;
+}
+
+.content {
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.artwork {
+  width: 280px;
+}
+
+.titleBlock {
+  text-align: center;
+}
+
+.epTitle {
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+}
+
+.podcastName {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+}
+
+.progressBlock {
+  width: 100%;
+}
+
+.progressTrack {
+  position: relative;
+  width: 100%;
+  height: 5px;
+  background: #f0f0f5;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--color-accent);
+  border-radius: 3px;
+}
+
+.chapterTick {
+  position: absolute;
+  top: -3px;
+  width: 2px;
+  height: 11px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 1px;
+  pointer-events: none;
+}
+
+.times {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--color-text-placeholder);
+  margin-top: 6px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+}
+
+.skipBtn {
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  display: flex;
+}
+
+.playCircle {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: var(--color-accent);
+  box-shadow: var(--shadow-primary-btn);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.speedPill {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  border-radius: 14px;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+
+.section {
+  width: 100%;
+  text-align: left;
+}
+
+.sectionTitle {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-placeholder);
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  margin-bottom: 10px;
+}
+
+.description {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  white-space: pre-wrap;
+}
+
+.chapterList {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chapterRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.chapterRow:hover {
+  background: var(--color-surface);
+}
+
+.chapterTime {
+  font-size: 11px;
+  color: var(--color-text-placeholder);
+  width: 44px;
+  flex-shrink: 0;
+}
+
+.chapterTitle {
+  font-size: 13px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queueRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.queueRow:hover {
+  background: var(--color-surface);
+}
+
+.queueMeta {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.queueTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queueSub {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

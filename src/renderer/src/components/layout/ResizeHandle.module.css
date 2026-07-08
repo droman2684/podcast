@@ -1,0 +1,10 @@
+.handle {
+  width: 6px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+}
+
+.handle:hover {
+  background: var(--color-accent-bg);
+}
