@@ -3,6 +3,8 @@ out
 dist
 release
 .DS_Store
+._*
 *.log
 *.tsbuildinfo
 .claude/settings.local.json
+.env

@@ -24,7 +24,7 @@ export interface PlaybackSlice {
   setDuration: (sec: number) => void
   cycleSpeed: () => void
   setVolume: (v: number) => void
-  playNext: () => void
+  playNext: (nextEpisodeId: string | null) => void
   playFromQueue: (episodeId: string) => void
   playNextInQueue: () => void
   playPreviousInQueue: () => void
@@ -71,17 +71,18 @@ export const createPlaybackSlice: StateCreator<AppState, [], [], PlaybackSlice> 
   setVolume: (v) => set({ volume: Math.max(0, Math.min(1, v)) }),
 
   // Called by useAudioEngine's `ended` handler once the just-finished episode
-  // has already been removed from the queue — so queue[0] here is already
-  // "the next thing up." This must NOT also remove that episode: it hasn't
-  // played at all yet, and only leaves the queue when it's manually removed
-  // or *it* finishes naturally, same as every other episode.
-  playNext: () => {
-    const { queue } = get()
-    if (queue.length === 0) {
+  // has already been removed from the queue. nextEpisodeId is the id that
+  // was directly below the finished episode *before* that removal (computed
+  // by the caller, since removal shifts every later index down by one) —
+  // this must NOT also remove that episode: it hasn't played at all yet, and
+  // only leaves the queue when it's manually removed or *it* finishes
+  // naturally, same as every other episode.
+  playNext: (nextEpisodeId) => {
+    if (!nextEpisodeId) {
       set({ playing: false })
       return
     }
-    get().loadEpisode(queue[0], { autoplay: true })
+    get().loadEpisode(nextEpisodeId, { autoplay: true })
   },
 
   // Playing an episode from the queue does not remove it — an episode only

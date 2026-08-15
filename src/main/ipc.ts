@@ -1,9 +1,12 @@
-import { ipcMain } from 'electron'
+import { ipcMain, dialog } from 'electron'
 import { IPC_CHANNELS } from '@shared/ipcChannels'
 import type { StationSettingsPatch, ColumnLayout } from '@shared/ipcChannels'
+import type { QueuePrefs } from '@shared/queueView'
 import type { PodcastSettings } from '@shared/types'
-import { getSnapshot, persist, DEFAULT_PODCAST_SETTINGS } from './persistence'
+import { getSnapshot, persist, touchSync, DEFAULT_PODCAST_SETTINGS } from './persistence'
 import { searchPodcasts, previewPodcast } from './search'
+import { getCategoryPicks, getKeywordPicks, getPodcastOfTheDay } from './recommendations'
+import { getTrendingEpisodes } from './trendingEpisodes'
 import {
   listPodcasts,
   listEpisodes,
@@ -12,7 +15,9 @@ import {
   refreshPodcast,
   refreshAllPodcasts,
   markEpisodePlayed,
-  setPodcastArtwork
+  setEpisodeDuration,
+  setPodcastArtwork,
+  importOpml
 } from './subscriptions'
 import { listPrivateFeeds, addPrivateFeed, removePrivateFeed, refreshPrivateFeed } from './privateFeeds'
 import { fetchChapters } from './chapters'
@@ -24,10 +29,25 @@ import {
   removePodcastFromStation,
   updateStationSettings
 } from './stations'
+import { checkForUpdate, installUpdate } from './updater'
+import { getMainWindow } from './windowRegistry'
+import { signUpWithPassword, signInWithPassword, signOut, getAuthState } from './sync/auth'
+import { runSyncCycle } from './sync/sync'
 
 export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.SEARCH_PODCASTS, (_event, term: string) => searchPodcasts(term))
   ipcMain.handle(IPC_CHANNELS.SEARCH_PREVIEW, (_event, feedUrl: string) => previewPodcast(feedUrl))
+
+  ipcMain.handle(IPC_CHANNELS.RECOMMENDATIONS_CATEGORY_PICKS, (_event, category: string) =>
+    getCategoryPicks(category)
+  )
+  ipcMain.handle(IPC_CHANNELS.RECOMMENDATIONS_KEYWORD_PICKS, (_event, term: string) =>
+    getKeywordPicks(term)
+  )
+  ipcMain.handle(IPC_CHANNELS.RECOMMENDATIONS_DAILY_PICK, () => getPodcastOfTheDay())
+  ipcMain.handle(IPC_CHANNELS.RECOMMENDATIONS_TRENDING_EPISODES, (_event, category: string) =>
+    getTrendingEpisodes(category)
+  )
 
   ipcMain.handle(IPC_CHANNELS.SUBSCRIPTIONS_LIST, () => listPodcasts())
   ipcMain.handle(IPC_CHANNELS.SUBSCRIPTIONS_SUBSCRIBE, (_event, feedUrl: string) =>
@@ -48,11 +68,31 @@ export function registerIpcHandlers(): void {
     IPC_CHANNELS.SUBSCRIPTIONS_SET_ARTWORK,
     (_event, podcastId: string, dataUrl: string | null) => setPodcastArtwork(podcastId, dataUrl)
   )
+  ipcMain.handle(IPC_CHANNELS.SUBSCRIPTIONS_IMPORT_OPML, async () => {
+    const win = getMainWindow()
+    const dialogResult = await (win
+      ? dialog.showOpenDialog(win, {
+          title: 'Import OPML Subscriptions',
+          filters: [{ name: 'OPML', extensions: ['opml', 'xml'] }],
+          properties: ['openFile']
+        })
+      : dialog.showOpenDialog({
+          title: 'Import OPML Subscriptions',
+          filters: [{ name: 'OPML', extensions: ['opml', 'xml'] }],
+          properties: ['openFile']
+        }))
+    if (dialogResult.canceled || dialogResult.filePaths.length === 0) return null
+    return importOpml(dialogResult.filePaths[0])
+  })
 
   ipcMain.handle(IPC_CHANNELS.EPISODES_LIST, (_event, podcastId: string) => listEpisodes(podcastId))
   ipcMain.handle(
     IPC_CHANNELS.EPISODES_MARK_PLAYED,
     (_event, episodeId: string, played: boolean) => markEpisodePlayed(episodeId, played)
+  )
+  ipcMain.handle(
+    IPC_CHANNELS.EPISODES_SET_DURATION,
+    (_event, episodeId: string, durationSec: number) => setEpisodeDuration(episodeId, durationSec)
   )
   ipcMain.handle(IPC_CHANNELS.EPISODES_GET_CHAPTERS, (_event, chaptersUrl: string) =>
     fetchChapters(chaptersUrl)
@@ -61,6 +101,14 @@ export function registerIpcHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.QUEUE_GET, () => getSnapshot().queue)
   ipcMain.handle(IPC_CHANNELS.QUEUE_SET, (_event, episodeIds: string[]) => {
     getSnapshot().queue = episodeIds
+    touchSync('queue')
+    persist()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.QUEUE_PREFS_GET, () => getSnapshot().queuePrefs)
+  ipcMain.handle(IPC_CHANNELS.QUEUE_PREFS_SET, (_event, prefs: QueuePrefs) => {
+    getSnapshot().queuePrefs = prefs
+    touchSync('queuePrefs')
     persist()
   })
 
@@ -71,6 +119,7 @@ export function registerIpcHandlers(): void {
     IPC_CHANNELS.PLAYBACK_SAVE_POSITION,
     (_event, episodeId: string, positionSec: number) => {
       getSnapshot().playbackPositions[episodeId] = positionSec
+      touchSync(`playbackPosition:${episodeId}`)
       persist()
     }
   )
@@ -94,6 +143,7 @@ export function registerIpcHandlers(): void {
       const current = snapshot.podcastSettings[podcastId] ?? DEFAULT_PODCAST_SETTINGS
       const updated = { ...current, ...patch }
       snapshot.podcastSettings[podcastId] = updated
+      touchSync(`podcastSettings:${podcastId}`)
       persist()
       return updated
     }
@@ -121,4 +171,18 @@ export function registerIpcHandlers(): void {
     getSnapshot().columnLayout = layout
     persist()
   })
+
+  ipcMain.handle(IPC_CHANNELS.UPDATE_CHECK, () => checkForUpdate())
+  ipcMain.handle(IPC_CHANNELS.UPDATE_INSTALL, () => installUpdate())
+
+  ipcMain.handle(IPC_CHANNELS.AUTH_SIGN_UP_WITH_PASSWORD, (_event, email: string, password: string) =>
+    signUpWithPassword(email, password)
+  )
+  ipcMain.handle(IPC_CHANNELS.AUTH_SIGN_IN_WITH_PASSWORD, (_event, email: string, password: string) =>
+    signInWithPassword(email, password)
+  )
+  ipcMain.handle(IPC_CHANNELS.AUTH_SIGN_OUT, () => signOut())
+  ipcMain.handle(IPC_CHANNELS.AUTH_GET_STATE, () => getAuthState())
+
+  ipcMain.handle(IPC_CHANNELS.SYNC_NOW, () => runSyncCycle())
 }

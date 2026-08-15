@@ -6,6 +6,7 @@ import MainContent from './MainContent'
 import NowPlayingPanel from './NowPlayingPanel'
 import BottomPlayerBar from './BottomPlayerBar'
 import PodcastSettingsModal from '@renderer/components/modals/PodcastSettingsModal'
+import SyncAccountModal from '@renderer/components/modals/SyncAccountModal'
 import PlaybackEngine from '@renderer/components/playback/PlaybackEngine'
 import NowPlayingExpanded from '@renderer/components/playback/NowPlayingExpanded'
 import styles from './AppShell.module.css'
@@ -25,6 +26,7 @@ function AppShell(): React.JSX.Element {
       </div>
       <BottomPlayerBar />
       <PodcastSettingsModal />
+      <SyncAccountModal />
       <PlaybackEngine />
       <NowPlayingExpanded />
     </div>

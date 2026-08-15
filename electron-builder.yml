@@ -11,3 +11,12 @@ mac:
   category: public.app-category.entertainment
   target:
     - target: dir
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

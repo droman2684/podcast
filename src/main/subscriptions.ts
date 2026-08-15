@@ -1,9 +1,31 @@
+import { safeStorage } from 'electron'
 import type { Podcast, Episode } from '@shared/types'
 import { IPC_CHANNELS } from '@shared/ipcChannels'
-import { getSnapshot, persist, DEFAULT_PODCAST_SETTINGS } from './persistence'
+import {
+  getSnapshot,
+  persist,
+  touchEpisodes,
+  touchSync,
+  touchSyncDelete,
+  DEFAULT_PODCAST_SETTINGS
+} from './persistence'
 import { parseFeed, hashId } from './rss'
 import { notify } from './notifications'
 import { getMainWindow } from './windowRegistry'
+import { readOpmlFeedUrls } from './opml'
+
+// Private feeds are stored as regular podcasts (see privateFeeds.ts) so they
+// show up in the Library like any other subscription — but fetching them
+// needs the saved Basic auth credentials. Without this, refreshPodcast (and
+// therefore the periodic/startup refreshAllPodcasts below) would fetch
+// private feeds unauthenticated, fail every time, and never surface new
+// episodes.
+function privateAuthHeader(podcastId: string): string | undefined {
+  const feed = getSnapshot().privateFeeds[podcastId]
+  if (!feed) return undefined
+  const pass = safeStorage.decryptString(Buffer.from(feed.encryptedPassword, 'base64'))
+  return `Basic ${Buffer.from(`${feed.user}:${pass}`).toString('base64')}`
+}
 
 export function listPodcasts(): Podcast[] {
   return Object.values(getSnapshot().podcasts)
@@ -42,13 +64,58 @@ export async function subscribe(feedUrl: string, isPrivate = false): Promise<Pod
 
   snapshot.podcasts[id] = podcast
   snapshot.episodesByPodcast[id] = episodes
+  touchEpisodes(id)
   if (!snapshot.podcastSettings[id]) snapshot.podcastSettings[id] = { ...DEFAULT_PODCAST_SETTINGS }
+  touchSync(`podcast:${id}`)
   persist()
 
   return podcast
 }
 
-export function unsubscribe(podcastId: string): void {
+export interface OpmlImportResult {
+  imported: Podcast[]
+  skipped: number
+  failed: { feedUrl: string; error: string }[]
+}
+
+// Overcast (and every other podcast app) exports subscriptions as OPML —
+// a flat list of feed URLs. Subscribing to a few hundred of them one at a
+// time over the network would be slow, so a small worker pool fetches
+// several feeds concurrently. Each feed's failure is isolated so one broken
+// or dead feed in the file doesn't abort the rest of the import.
+export async function importOpml(filePath: string): Promise<OpmlImportResult> {
+  const feedUrls = await readOpmlFeedUrls(filePath)
+  const snapshot = getSnapshot()
+  const imported: Podcast[] = []
+  const failed: { feedUrl: string; error: string }[] = []
+  let skipped = 0
+
+  const CONCURRENCY = 4
+  let cursor = 0
+  async function worker(): Promise<void> {
+    while (cursor < feedUrls.length) {
+      const feedUrl = feedUrls[cursor++]
+      if (snapshot.podcasts[hashId(feedUrl)]) {
+        skipped++
+        continue
+      }
+      try {
+        imported.push(await subscribe(feedUrl))
+      } catch (err) {
+        failed.push({ feedUrl, error: err instanceof Error ? err.message : String(err) })
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, feedUrls.length) }, worker))
+
+  return { imported, skipped, failed }
+}
+
+// Shared by the direct unsubscribe action below and by sync.ts applying a
+// remote unsubscribe tombstone — both need the exact same cleanup (queue and
+// station references dangling on a podcast id must never survive an
+// unsubscribe), just triggered from a different origin.
+export function applyUnsubscribeCascade(podcastId: string): void {
   const snapshot = getSnapshot()
   // Must read this before deleting episodesByPodcast[podcastId] below — the
   // filter afterward otherwise always sees `undefined` and the queue keeps
@@ -56,11 +123,29 @@ export function unsubscribe(podcastId: string): void {
   const removedEpisodeIds = new Set((snapshot.episodesByPodcast[podcastId] ?? []).map((e) => e.id))
   delete snapshot.podcasts[podcastId]
   delete snapshot.episodesByPodcast[podcastId]
+  touchEpisodes(podcastId)
   delete snapshot.podcastSettings[podcastId]
-  snapshot.queue = snapshot.queue.filter((episodeId) => !removedEpisodeIds.has(episodeId))
+  // Private feeds are stored as regular podcasts with a matching entry in
+  // privateFeeds keyed by the same id (see privateFeeds.ts) — unsubscribing
+  // via the generic Sidebar/EpisodeScreen path must clean that up too, or it
+  // leaves an orphaned credential record that can never surface as a
+  // subscription again (podcasts[id] is gone but privateFeeds[id] isn't).
+  delete snapshot.privateFeeds[podcastId]
+
+  const nextQueue = snapshot.queue.filter((episodeId) => !removedEpisodeIds.has(episodeId))
+  if (nextQueue.length !== snapshot.queue.length) touchSync('queue')
+  snapshot.queue = nextQueue
+
   for (const station of Object.values(snapshot.stations)) {
+    if (!station.podcastIds.includes(podcastId)) continue
     station.podcastIds = station.podcastIds.filter((id) => id !== podcastId)
+    touchSync(`station:${station.id}`)
   }
+}
+
+export function unsubscribe(podcastId: string): void {
+  applyUnsubscribeCascade(podcastId)
+  touchSyncDelete('podcasts', podcastId, `podcast:${podcastId}`)
   persist()
 }
 
@@ -77,7 +162,7 @@ export async function refreshPodcast(podcastId: string): Promise<RefreshOutcome>
 
   const { podcast: parsed, episodes: freshEpisodes } = await parseFeed(
     existing.feedUrl,
-    undefined,
+    privateAuthHeader(podcastId),
     podcastId
   )
 
@@ -104,6 +189,7 @@ export async function refreshPodcast(podcastId: string): Promise<RefreshOutcome>
 
   snapshot.podcasts[podcastId] = podcast
   snapshot.episodesByPodcast[podcastId] = merged
+  touchEpisodes(podcastId)
   persist()
 
   // Push the fresh data to the renderer regardless of who triggered this
@@ -129,6 +215,11 @@ export async function refreshAllPodcasts(): Promise<
 > {
   const ids = Object.keys(getSnapshot().podcasts)
   const results: { podcastId: string; newEpisodeCount: number }[] = []
+  // Lets the renderer show a "Syncing…" indicator (bottom-left of the sidebar,
+  // like the YouTube app) for both the startup refresh and the periodic
+  // background one — otherwise a multi-podcast library refreshing on a slow
+  // connection looks like nothing is happening.
+  getMainWindow()?.webContents.send(IPC_CHANNELS.SYNC_STATUS_EVENT, { status: 'syncing' })
   for (const id of ids) {
     try {
       const { newEpisodeIds } = await refreshPodcast(id)
@@ -138,6 +229,11 @@ export async function refreshAllPodcasts(): Promise<
       results.push({ podcastId: id, newEpisodeCount: 0 })
     }
   }
+  const newEpisodeCount = results.reduce((sum, r) => sum + r.newEpisodeCount, 0)
+  getMainWindow()?.webContents.send(IPC_CHANNELS.SYNC_STATUS_EVENT, {
+    status: 'idle',
+    newEpisodeCount
+  })
   return results
 }
 
@@ -147,6 +243,7 @@ export function setPodcastArtwork(podcastId: string, dataUrl: string | null): Po
   const podcast = snapshot.podcasts[podcastId]
   if (!podcast) throw new Error(`Not subscribed to podcast ${podcastId}`)
   podcast.customArtworkUrl = dataUrl
+  touchSync(`podcast:${podcastId}`)
   persist()
   return podcast
 }
@@ -160,6 +257,25 @@ export function markEpisodePlayed(episodeId: string, played: boolean): void {
     episodes[idx] = { ...episodes[idx], played }
     const podcast = snapshot.podcasts[podcastId]
     if (podcast) podcast.unread = computeUnread(episodes)
+    touchEpisodes(podcastId)
+    touchSync(`episodePlayed:${episodeId}`)
+    persist()
+    return
+  }
+}
+
+// Some feeds omit (or malform) <itunes:duration>, leaving durationSec at 0
+// and the run time blank everywhere it's shown. Once the audio element
+// actually loads the file we know the real duration for free — this backs
+// it into the persisted episode so the list only ever needs to learn it once.
+export function setEpisodeDuration(episodeId: string, durationSec: number): void {
+  const snapshot = getSnapshot()
+  for (const [podcastId, episodes] of Object.entries(snapshot.episodesByPodcast)) {
+    const idx = episodes.findIndex((e) => e.id === episodeId)
+    if (idx === -1) continue
+    episodes[idx] = { ...episodes[idx], durationSec }
+    touchEpisodes(podcastId)
+    touchSync(`episodePlayed:${episodeId}`)
     persist()
     return
   }

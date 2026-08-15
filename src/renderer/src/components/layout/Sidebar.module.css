@@ -31,6 +31,36 @@
   font-weight: 700;
   color: var(--color-text-primary);
   letter-spacing: -0.4px;
+  flex: 1;
+}
+
+.updateBtn {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.updateBtn:hover {
+  background: var(--color-border-strong);
+}
+.updateBtnAvailable {
+  background: color-mix(in srgb, var(--color-accent) 15%, transparent);
+}
+
+.updateSpin {
+  animation: updateSpin 0.9s linear infinite;
+}
+@keyframes updateSpin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .section {
@@ -68,6 +98,12 @@
 }
 .exportBtn:hover {
   background: var(--color-border-strong);
+}
+
+.importSummary {
+  font-size: 10px;
+  color: var(--color-text-placeholder);
+  margin-top: 4px;
 }
 
 .navList {
@@ -131,4 +167,16 @@
 }
 .subRow:hover .unsubBtn {
   opacity: 1;
+}
+
+.syncStatus {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--color-border-strong);
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-text-placeholder);
 }

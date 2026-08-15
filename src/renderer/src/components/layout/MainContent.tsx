@@ -6,6 +6,7 @@ import EpisodeScreen from '@renderer/components/screens/EpisodeScreen'
 import QueueScreen from '@renderer/components/screens/QueueScreen'
 import StationsScreen from '@renderer/components/screens/StationsScreen'
 import FeedsScreen from '@renderer/components/screens/FeedsScreen'
+import RecommendationsScreen from '@renderer/components/screens/RecommendationsScreen'
 
 function MainContent(): React.JSX.Element {
   const nav = useAppStore((s) => s.nav)
@@ -27,6 +28,8 @@ function MainContent(): React.JSX.Element {
         return <StationsScreen />
       case 'feeds':
         return <FeedsScreen />
+      case 'recommendations':
+        return <RecommendationsScreen />
     }
   })()
 

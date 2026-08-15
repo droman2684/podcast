@@ -8,5 +8,8 @@ export const categories: { label: string; bg: string; cl: string }[] = [
   { label: 'History', bg: '#f3e8fd', cl: '#4a1a7a' },
   { label: 'Science', bg: '#e2f4fd', cl: '#1a4a7a' },
   { label: 'Business', bg: '#fef8e0', cl: '#6a5200' },
-  { label: 'Health & Fitness', bg: '#e6f9ee', cl: '#0a4a24' }
+  { label: 'Health & Fitness', bg: '#e6f9ee', cl: '#0a4a24' },
+  { label: 'MLB', bg: '#e0f7f5', cl: '#0a5c52' },
+  { label: 'NBA', bg: '#fde8f3', cl: '#8a1a5c' },
+  { label: 'NFL', bg: '#f0ece0', cl: '#5c4a1a' }
 ]

@@ -4,6 +4,7 @@ import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
 import ProgressBar from '@renderer/components/ui/ProgressBar'
 import SectionLabel from '@renderer/components/ui/SectionLabel'
 import { formatSeconds, formatRemaining } from '@renderer/utils/duration'
+import { useScrubHover } from '@renderer/hooks/useScrubHover'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
 import styles from './NowPlayingPanel.module.css'
 
@@ -34,6 +35,7 @@ function NowPlayingPanel(): React.JSX.Element {
   const canGoPrevious = previousInQueue(queue, currentEpisodeId) !== null
 
   const progressPct = durationSec > 0 ? (currentTimeSec / durationSec) * 100 : 0
+  const { hoverFraction, hoverTimeSec, onMouseMove, onMouseLeave } = useScrubHover(durationSec)
 
   const handleSeekClick = (e: React.MouseEvent<HTMLDivElement>): void => {
     if (durationSec <= 0) return
@@ -64,7 +66,17 @@ function NowPlayingPanel(): React.JSX.Element {
             </div>
 
             <div className={styles.progressRow}>
-              <div onClick={handleSeekClick} style={{ cursor: 'pointer' }}>
+              <div
+                className={styles.trackHit}
+                onClick={handleSeekClick}
+                onMouseMove={onMouseMove}
+                onMouseLeave={onMouseLeave}
+              >
+                {hoverFraction !== null && hoverTimeSec !== null && (
+                  <div className={styles.hoverTooltip} style={{ left: `${hoverFraction * 100}%` }}>
+                    {formatSeconds(hoverTimeSec)}
+                  </div>
+                )}
                 <ProgressBar pct={progressPct} />
               </div>
               <div className={styles.times}>

@@ -2,6 +2,7 @@ import { Play, Pause, Volume2 } from 'lucide-react'
 import { useAppStore } from '@renderer/state/store'
 import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
 import { formatSeconds, formatRemaining } from '@renderer/utils/duration'
+import { useScrubHover } from '@renderer/hooks/useScrubHover'
 import styles from './BottomPlayerBar.module.css'
 
 function BottomPlayerBar(): React.JSX.Element {
@@ -24,6 +25,7 @@ function BottomPlayerBar(): React.JSX.Element {
         .find((e) => e.id === currentEpisodeId)
     : undefined
   const progressPct = durationSec > 0 ? (currentTimeSec / durationSec) * 100 : 0
+  const { hoverFraction, hoverTimeSec, onMouseMove, onMouseLeave } = useScrubHover(durationSec)
 
   const handleSeekClick = (e: React.MouseEvent<HTMLDivElement>): void => {
     if (durationSec <= 0) return
@@ -73,16 +75,19 @@ function BottomPlayerBar(): React.JSX.Element {
             <Play size={13} fill="#fff" color="#fff" style={{ marginLeft: 1 }} />
           )}
         </div>
-        <div style={{ flex: 1, maxWidth: 480, cursor: 'pointer' }} onClick={handleSeekClick}>
-          <div style={{ width: '100%', height: 2, background: '#f0f0f5', borderRadius: 2 }}>
-            <div
-              style={{
-                width: `${progressPct}%`,
-                height: '100%',
-                background: 'var(--color-accent)',
-                borderRadius: 2
-              }}
-            />
+        <div
+          className={styles.trackHit}
+          onClick={handleSeekClick}
+          onMouseMove={onMouseMove}
+          onMouseLeave={onMouseLeave}
+        >
+          {hoverFraction !== null && hoverTimeSec !== null && (
+            <div className={styles.hoverTooltip} style={{ left: `${hoverFraction * 100}%` }}>
+              {formatSeconds(hoverTimeSec)}
+            </div>
+          )}
+          <div className={styles.track}>
+            <div className={styles.trackFill} style={{ width: `${progressPct}%` }} />
           </div>
         </div>
       </div>

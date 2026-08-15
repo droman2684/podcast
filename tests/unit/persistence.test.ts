@@ -14,6 +14,12 @@ function baseData(overrides: Partial<PersistedData> = {}): PersistedData {
     stations: {},
     windowBounds: null,
     columnLayout: null,
+    dailyPick: null,
+    queuePrefs: null,
+    syncUpdatedAt: {},
+    syncPendingDeletes: [],
+    syncLastPushedAt: null,
+    syncLastPulledAt: null,
     ...overrides
   }
 }
@@ -100,5 +106,20 @@ describe('normalize', () => {
   it('coerces a missing or malformed queue to an empty array', () => {
     expect(normalize(baseData({ queue: undefined as never })).queue).toEqual([])
     expect(normalize(baseData({ queue: 'e1' as never })).queue).toEqual([])
+  })
+
+  it('passes through well-formed queuePrefs', () => {
+    const data = baseData({
+      queuePrefs: { sortMode: 'newest', groupByShow: true, queueView: 'grid' }
+    })
+    expect(normalize(data).queuePrefs).toEqual({ sortMode: 'newest', groupByShow: true, queueView: 'grid' })
+  })
+
+  it('coerces malformed queuePrefs to null', () => {
+    expect(
+      normalize(baseData({ queuePrefs: { sortMode: 'bogus', groupByShow: true, queueView: 'grid' } as never }))
+        .queuePrefs
+    ).toBeNull()
+    expect(normalize(baseData({ queuePrefs: 'nope' as never })).queuePrefs).toBeNull()
   })
 })

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useAppStore } from '@renderer/state/store'
 import type { Episode } from '@renderer/types'
+import { nextInQueue } from '@shared/queueView'
 
 const SAVE_POSITION_INTERVAL_MS = 5000
 
@@ -72,18 +73,39 @@ export function useAudioEngine(): React.RefObject<HTMLAudioElement | null> {
     if (!audio) return
 
     const onTimeUpdate = (): void => useAppStore.getState().setCurrentTime(audio.currentTime)
-    const onLoadedMetadata = (): void => useAppStore.getState().setDuration(audio.duration || 0)
+    const onLoadedMetadata = (): void => {
+      const duration = audio.duration || 0
+      useAppStore.getState().setDuration(duration)
+
+      // Some feeds omit/malform <itunes:duration>, so the episode was parsed
+      // with durationSec 0 and never shows a run time in any list. Now that
+      // the browser has actually loaded the file, back the real duration in
+      // so this only needs to happen once per episode.
+      const state = useAppStore.getState()
+      if (state.currentEpisodeId && Number.isFinite(duration) && duration > 0) {
+        const episode = findEpisode(state.episodesByPodcast, state.currentEpisodeId)
+        if (episode && episode.durationSec <= 0) {
+          state.setEpisodeDuration(state.currentEpisodeId, duration)
+        }
+      }
+    }
     const onEnded = (): void => {
       const state = useAppStore.getState()
       if (state.currentEpisodeId) {
         state.markEpisodePlayed(state.currentEpisodeId, true)
         window.api.playback.savePosition(state.currentEpisodeId, 0)
         state.setPositionLocal(state.currentEpisodeId, 0)
+        // Figure out what comes next — the episode directly below the one
+        // that just finished — before removing it from the queue, since
+        // removal shifts every subsequent index down by one.
+        const nextId = nextInQueue(state.queue, state.currentEpisodeId)
         // Only a fully-finished episode is auto-removed from the queue — playing
         // one (including out of order) never removes it on its own.
         state.removeFromQueue(state.currentEpisodeId)
+        state.playNext(nextId)
+      } else {
+        state.playNext(null)
       }
-      state.playNext()
     }
     const onError = (): void => console.error('Audio element error:', audio.error)
 

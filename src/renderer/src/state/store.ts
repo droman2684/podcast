@@ -13,6 +13,11 @@ import {
   type PodcastSettingsSlice
 } from './slices/podcastSettingsSlice'
 import { createStationsSlice, type StationsSlice } from './slices/stationsSlice'
+import {
+  createRecommendationsSlice,
+  type RecommendationsSlice
+} from './slices/recommendationsSlice'
+import { createAuthSlice, type AuthSlice } from './slices/authSlice'
 
 export type AppState = NavSlice &
   LayoutSlice &
@@ -24,7 +29,9 @@ export type AppState = NavSlice &
   FeedsSlice &
   SubscriptionsSlice &
   PodcastSettingsSlice &
-  StationsSlice
+  StationsSlice &
+  RecommendationsSlice &
+  AuthSlice
 
 export const useAppStore = create<AppState>()((...a) => ({
   ...createNavSlice(...a),
@@ -37,5 +44,7 @@ export const useAppStore = create<AppState>()((...a) => ({
   ...createFeedsSlice(...a),
   ...createSubscriptionsSlice(...a),
   ...createPodcastSettingsSlice(...a),
-  ...createStationsSlice(...a)
+  ...createStationsSlice(...a),
+  ...createRecommendationsSlice(...a),
+  ...createAuthSlice(...a)
 }))

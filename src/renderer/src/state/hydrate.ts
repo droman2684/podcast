@@ -4,10 +4,12 @@ export async function hydrateApp(): Promise<void> {
   const store = useAppStore.getState()
 
   store.initSubscriptionUpdates()
+  store.initAuth()
 
   await store.loadSubscriptions()
   await Promise.all([
     store.loadQueue(),
+    store.loadQueuePrefs(),
     store.loadPrivateFeeds(),
     store.loadStations(),
     store.loadPositions(),

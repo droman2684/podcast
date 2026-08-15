@@ -1,5 +1,19 @@
-import { useState } from 'react'
-import { Home, Search, ListOrdered, Radio, Lock, X, Copy, Check } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import {
+  Home,
+  Search,
+  ListOrdered,
+  Radio,
+  Lock,
+  X,
+  Copy,
+  Check,
+  Sparkles,
+  RefreshCw,
+  Download,
+  Upload,
+  Cloud
+} from 'lucide-react'
 import { useAppStore } from '@renderer/state/store'
 import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
 import SidebarNavItem from './SidebarNavItem'
@@ -22,13 +36,16 @@ function buildSubscriptionExport(podcasts: Podcast[]): string {
 const browseItems = [
   { nav: 'home' as const, label: 'Home', icon: Home },
   { nav: 'search' as const, label: 'Search', icon: Search },
-  { nav: 'queue' as const, label: 'Queue', icon: ListOrdered }
+  { nav: 'queue' as const, label: 'Queue', icon: ListOrdered },
+  { nav: 'recommendations' as const, label: 'Recommendations', icon: Sparkles }
 ]
 
 const manageItems = [
   { nav: 'stations' as const, label: 'Stations', icon: Radio },
   { nav: 'feeds' as const, label: 'Private Feeds', icon: Lock }
 ]
+
+type UpdateState = 'idle' | 'checking' | 'upToDate' | 'available' | 'installing' | 'error'
 
 function Sidebar(): React.JSX.Element {
   const sidebarW = useAppStore((s) => s.sidebarW)
@@ -37,13 +54,97 @@ function Sidebar(): React.JSX.Element {
 
   const podcasts = useAppStore((s) => s.podcasts)
   const unsubscribe = useAppStore((s) => s.unsubscribe)
+  const importOpml = useAppStore((s) => s.importOpml)
+  const syncStatus = useAppStore((s) => s.syncStatus)
+  const lastSyncNewCount = useAppStore((s) => s.lastSyncNewCount)
+  const authStep = useAppStore((s) => s.authStep)
+  const openAccountModal = useAppStore((s) => s.openAccountModal)
 
   const [copied, setCopied] = useState(false)
+  const [updateState, setUpdateState] = useState<UpdateState>('idle')
+  const [importing, setImporting] = useState(false)
+  const [importSummary, setImportSummary] = useState<string | null>(null)
+
+  // Mirrors the YouTube app's bottom-left sync indicator: show it while a
+  // feed refresh is in flight, then briefly confirm before fading out —
+  // rather than just disappearing the instant syncing flips back to idle.
+  const [showSynced, setShowSynced] = useState(false)
+  const wasSyncingRef = useRef(false)
+  useEffect(() => {
+    if (syncStatus === 'syncing') {
+      wasSyncingRef.current = true
+      setShowSynced(false)
+      return
+    }
+    if (!wasSyncingRef.current) return
+    wasSyncingRef.current = false
+    setShowSynced(true)
+    const timer = setTimeout(() => setShowSynced(false), 2500)
+    return () => clearTimeout(timer)
+  }, [syncStatus])
 
   const handleExport = async (): Promise<void> => {
     await navigator.clipboard.writeText(buildSubscriptionExport(podcasts))
     setCopied(true)
     setTimeout(() => setCopied(false), 1500)
+  }
+
+  // OPML is the export format Overcast (and Apple Podcasts, Pocket Casts, etc.)
+  // use for subscription lists — this lets users bring an existing library
+  // over instead of re-adding every show by hand.
+  const handleImportOpml = async (): Promise<void> => {
+    if (importing) return
+    setImporting(true)
+    setImportSummary(null)
+    try {
+      const result = await importOpml()
+      if (result) {
+        const parts = [`${result.imported.length} imported`]
+        if (result.skipped > 0) parts.push(`${result.skipped} already subscribed`)
+        if (result.failed.length > 0) parts.push(`${result.failed.length} failed`)
+        setImportSummary(parts.join(', '))
+        setTimeout(() => setImportSummary(null), 4000)
+      }
+    } catch {
+      setImportSummary('Import failed')
+      setTimeout(() => setImportSummary(null), 4000)
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const handleUpdateClick = async (): Promise<void> => {
+    if (updateState === 'checking' || updateState === 'installing') return
+
+    if (updateState === 'available') {
+      setUpdateState('installing')
+      try {
+        await window.api.update.install()
+      } catch {
+        setUpdateState('error')
+        setTimeout(() => setUpdateState('idle'), 2500)
+      }
+      return
+    }
+
+    setUpdateState('checking')
+    try {
+      const { available } = await window.api.update.check()
+      setUpdateState(available ? 'available' : 'upToDate')
+      if (!available) setTimeout(() => setUpdateState('idle'), 2500)
+    } catch {
+      setUpdateState('error')
+      setTimeout(() => setUpdateState('idle'), 2500)
+    }
+  }
+
+  const updateTitle: Record<UpdateState, string> = {
+    idle: 'Check for updates',
+    checking: 'Checking for updates…',
+    upToDate: "You're up to date",
+    available: 'Update available — click to install and restart',
+    installing: 'Installing update…',
+    error: 'Update check failed — click to retry'
   }
 
   return (
@@ -67,6 +168,32 @@ function Sidebar(): React.JSX.Element {
           </svg>
         </div>
         <span className={styles.wordmark}>Empire Pod</span>
+        <div
+          className={styles.updateBtn}
+          onClick={openAccountModal}
+          title={authStep === 'signedIn' ? 'Sync account' : 'Sign in to sync across devices'}
+        >
+          <Cloud size={13} color={authStep === 'signedIn' ? 'var(--color-accent)' : '#8e8e93'} />
+        </div>
+        <div
+          className={`${styles.updateBtn} ${updateState === 'available' ? styles.updateBtnAvailable : ''}`}
+          onClick={handleUpdateClick}
+          title={updateTitle[updateState]}
+        >
+          {updateState === 'available' ? (
+            <Download size={13} color="var(--color-accent)" />
+          ) : updateState === 'upToDate' ? (
+            <Check size={13} color="var(--color-accent)" />
+          ) : (
+            <RefreshCw
+              size={13}
+              color="#8e8e93"
+              className={
+                updateState === 'checking' || updateState === 'installing' ? styles.updateSpin : undefined
+              }
+            />
+          )}
+        </div>
       </div>
 
       <div className={styles.section}>
@@ -102,16 +229,26 @@ function Sidebar(): React.JSX.Element {
       <div className={styles.section} style={{ flexShrink: 0, paddingBottom: 4 }}>
         <div className={styles.subscriptionsHeader}>
           <div className={styles.sectionLabel}>Subscriptions</div>
-          {podcasts.length > 0 && (
+          <div style={{ display: 'flex', gap: 4 }}>
             <div
               className={styles.exportBtn}
-              onClick={handleExport}
-              title="Copy subscription list to clipboard — paste it to Claude for recommendations"
+              onClick={handleImportOpml}
+              title="Import an OPML file (e.g. exported from Overcast → Settings → Export OPML)"
             >
-              {copied ? <Check size={12} color="var(--color-accent)" /> : <Copy size={12} color="#8e8e93" />}
+              <Upload size={12} color="#8e8e93" className={importing ? styles.updateSpin : undefined} />
             </div>
-          )}
+            {podcasts.length > 0 && (
+              <div
+                className={styles.exportBtn}
+                onClick={handleExport}
+                title="Copy subscription list to clipboard — paste it to Claude for recommendations"
+              >
+                {copied ? <Check size={12} color="var(--color-accent)" /> : <Copy size={12} color="#8e8e93" />}
+              </div>
+            )}
+          </div>
         </div>
+        {importSummary && <div className={styles.importSummary}>{importSummary}</div>}
       </div>
       <div className={styles.subscriptions}>
         {podcasts.map((p) => (
@@ -137,6 +274,25 @@ function Sidebar(): React.JSX.Element {
           </div>
         ))}
       </div>
+      {(syncStatus === 'syncing' || showSynced) && (
+        <div className={styles.syncStatus}>
+          {syncStatus === 'syncing' ? (
+            <>
+              <RefreshCw size={12} color="#8e8e93" className={styles.updateSpin} />
+              <span>Syncing…</span>
+            </>
+          ) : (
+            <>
+              <Check size={12} color="var(--color-accent)" />
+              <span>
+                {lastSyncNewCount > 0
+                  ? `${lastSyncNewCount} new episode${lastSyncNewCount === 1 ? '' : 's'}`
+                  : 'Up to date'}
+              </span>
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }

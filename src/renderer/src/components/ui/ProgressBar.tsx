@@ -5,7 +5,7 @@ interface ProgressBarProps {
 
 function ProgressBar({ pct, height = 3 }: ProgressBarProps): React.JSX.Element {
   return (
-    <div style={{ width: '100%', height, background: '#f0f0f5', borderRadius: height }}>
+    <div style={{ width: '100%', height, background: 'var(--color-text-disabled)', borderRadius: height }}>
       <div
         style={{
           width: `${pct}%`,

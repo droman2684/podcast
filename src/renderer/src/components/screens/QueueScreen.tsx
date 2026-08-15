@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { GripVertical, X, Play, Pause, ChevronRight } from 'lucide-react'
+import { GripVertical, X, Play, Pause, ChevronRight, Grid2x2, List } from 'lucide-react'
 import { useAppStore } from '@renderer/state/store'
 import EpisodeArtwork from '@renderer/components/ui/EpisodeArtwork'
 import Pill from '@renderer/components/ui/Pill'
@@ -26,6 +26,12 @@ function QueueScreen(): React.JSX.Element {
   const queueDragOverId = useAppStore((s) => s.queueDragOverId)
   const setQueueDragId = useAppStore((s) => s.setQueueDragId)
   const setQueueDragOverId = useAppStore((s) => s.setQueueDragOverId)
+  const queueView = useAppStore((s) => s.queueView)
+  const setQueueView = useAppStore((s) => s.setQueueView)
+  const sortMode = useAppStore((s) => s.queueSortMode)
+  const setSortMode = useAppStore((s) => s.setQueueSortMode)
+  const groupByShow = useAppStore((s) => s.queueGroupByShow)
+  const setGroupByShow = useAppStore((s) => s.setQueueGroupByShow)
   const reorderQueue = useAppStore((s) => s.reorderQueue)
   const removeFromQueue = useAppStore((s) => s.removeFromQueue)
   const clearQueue = useAppStore((s) => s.clearQueue)
@@ -36,9 +42,7 @@ function QueueScreen(): React.JSX.Element {
   const positions = useAppStore((s) => s.positions)
   const currentTimeSec = useAppStore((s) => s.currentTimeSec)
 
-  const [sortMode, setSortMode] = useState<QueueSortMode>('manual')
   const [filterPodcastId, setFilterPodcastId] = useState<string>('all')
-  const [groupByShow, setGroupByShow] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
 
   const toggleExpanded = (episodeId: string): void => {
@@ -73,14 +77,16 @@ function QueueScreen(): React.JSX.Element {
   // Manual reordering (drag-and-drop) is only offered when the view is
   // showing the raw queue order 1:1 — any filter, sort, or grouping means a
   // dropped position on screen no longer corresponds to the real array.
-  const manualOrderActive = sortMode === 'manual' && filterPodcastId === 'all' && !groupByShow
+  // Grid cards don't support drag targets either, so it's list-view only.
+  const manualOrderActive =
+    sortMode === 'manual' && filterPodcastId === 'all' && !groupByShow && queueView === 'list'
 
   const handlePlayToggle = (episodeId: string): void => {
     if (currentEpisodeId === episodeId) togglePlay()
     else playFromQueue(episodeId)
   }
 
-  const renderRow = (episode: Episode, isFirst: boolean): React.JSX.Element => {
+  const renderRow = (episode: Episode): React.JSX.Element => {
     const isDragging = queueDragId === episode.id
     const isDropTarget = queueDragOverId === episode.id && queueDragId !== episode.id
     const isPlaying = currentEpisodeId === episode.id && playing
@@ -92,7 +98,7 @@ function QueueScreen(): React.JSX.Element {
     return (
       <div key={episode.id}>
         <div
-          className={styles.row}
+          className={`${styles.row} ${isExpanded ? styles.rowExpanded : ''} ${isDropTarget ? styles.rowDropTarget : ''}`}
           draggable={manualOrderActive}
           onClick={() => handlePlayToggle(episode.id)}
           onDragStart={(e) => {
@@ -115,18 +121,7 @@ function QueueScreen(): React.JSX.Element {
             setQueueDragId(null)
             setQueueDragOverId(null)
           }}
-          style={{
-            background: isDragging ? 'rgba(255,89,16,.07)' : isFirst ? '#fff7f2' : '#ffffff',
-            border: isExpanded
-              ? '1px solid var(--color-border-strong)'
-              : isDropTarget
-                ? '2px solid var(--color-accent)'
-                : '1px solid rgba(0,0,0,.07)',
-            borderBottom: isExpanded ? 'none' : undefined,
-            borderRadius: isExpanded ? '10px 10px 0 0' : undefined,
-            opacity: isDragging ? 0.45 : 1,
-            cursor: 'pointer'
-          }}
+          style={{ opacity: isDragging ? 0.45 : 1 }}
         >
           {manualOrderActive ? (
             <span className={styles.grip} onClick={(e) => e.stopPropagation()}>
@@ -195,10 +190,64 @@ function QueueScreen(): React.JSX.Element {
   }
 
   const renderFlatList = (episodes: Episode[]): React.JSX.Element => (
-    <div className={styles.list}>
-      {episodes.map((episode, i) => renderRow(episode, i === 0))}
-    </div>
+    <div className={styles.list}>{episodes.map((episode) => renderRow(episode))}</div>
   )
+
+  const renderGridCard = (episode: Episode): React.JSX.Element => {
+    const isPlaying = currentEpisodeId === episode.id && playing
+    const podcast = podcastById[episode.podcastId]
+    const progress = computeProgress(episode, positions, currentEpisodeId, currentTimeSec)
+
+    return (
+      <div
+        className={styles.gridCard}
+        key={episode.id}
+        onClick={() => handlePlayToggle(episode.id)}
+      >
+        <div style={{ position: 'relative' }}>
+          <EpisodeArtwork
+            artworkUrl={podcast?.customArtworkUrl ?? episode.artworkUrl}
+            fallbackLabel={podcast?.name ?? episode.title}
+            size={200}
+            radius={10}
+            progress={progress}
+          />
+          <div className={styles.gridPlayBtn}>
+            {isPlaying ? (
+              <Pause size={12} fill="var(--color-accent)" color="var(--color-accent)" />
+            ) : (
+              <Play
+                size={12}
+                fill="var(--color-accent)"
+                color="var(--color-accent)"
+                style={{ marginLeft: 1 }}
+              />
+            )}
+          </div>
+          <div
+            className={styles.gridRemoveBtn}
+            onClick={(e) => {
+              e.stopPropagation()
+              removeFromQueue(episode.id)
+            }}
+            title="Remove from queue"
+          >
+            <X size={11} color="var(--color-text-secondary)" />
+          </div>
+        </div>
+        <div className={styles.gridTitle}>{episode.title}</div>
+        <div className={styles.gridSub}>
+          {podcast?.name} · {formatDurationLabel(episode.durationSec)}
+        </div>
+      </div>
+    )
+  }
+
+  const renderGrid = (episodes: Episode[]): React.JSX.Element => (
+    <div className={styles.grid}>{episodes.map((episode) => renderGridCard(episode))}</div>
+  )
+
+  const renderVisible = queueView === 'grid' ? renderGrid : renderFlatList
 
   let groupedContent: React.JSX.Element
   if (groupByShow) {
@@ -208,13 +257,13 @@ function QueueScreen(): React.JSX.Element {
         {groups.map((group) => (
           <div key={group.podcastId} style={{ marginBottom: 18 }}>
             <SectionLabel>{podcastById[group.podcastId]?.name ?? 'Unknown show'}</SectionLabel>
-            <div style={{ marginTop: 8 }}>{renderFlatList(group.episodes)}</div>
+            <div style={{ marginTop: 8 }}>{renderVisible(group.episodes)}</div>
           </div>
         ))}
       </>
     )
   } else {
-    groupedContent = renderFlatList(visible)
+    groupedContent = renderVisible(visible)
   }
 
   return (
@@ -226,9 +275,35 @@ function QueueScreen(): React.JSX.Element {
             {filterPodcastId === 'all' ? `${items.length} episodes` : `${visible.length} of ${items.length} shown`}
           </div>
         </div>
-        <Pill variant="ghost" onClick={clearQueue}>
-          Clear all
-        </Pill>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className={styles.toggle}>
+            <div
+              className={styles.toggleBtn}
+              style={{
+                background: queueView === 'grid' ? '#fff' : 'transparent',
+                boxShadow: queueView === 'grid' ? '0 1px 3px rgba(0,0,0,.12)' : 'none'
+              }}
+              onClick={() => setQueueView('grid')}
+              title="Grid view"
+            >
+              <Grid2x2 size={14} color={queueView === 'grid' ? 'var(--color-accent)' : '#aeaeb2'} />
+            </div>
+            <div
+              className={styles.toggleBtn}
+              style={{
+                background: queueView === 'list' ? '#fff' : 'transparent',
+                boxShadow: queueView === 'list' ? '0 1px 3px rgba(0,0,0,.12)' : 'none'
+              }}
+              onClick={() => setQueueView('list')}
+              title="List view"
+            >
+              <List size={14} color={queueView === 'list' ? 'var(--color-accent)' : '#aeaeb2'} />
+            </div>
+          </div>
+          <Pill variant="ghost" onClick={clearQueue}>
+            Clear all
+          </Pill>
+        </div>
       </div>
 
       {items.length > 0 && (

@@ -1,14 +1,24 @@
-import { app, shell, BrowserWindow, screen } from 'electron'
+// electron-vite only exposes .env values to the renderer (import.meta.env) —
+// the main process needs them loaded into process.env explicitly, and this
+// must run before anything below reads EMPIRE_POD_SUPABASE_URL/ANON_KEY
+// (see src/main/sync/config.ts).
+import 'dotenv/config'
+import { app, session, shell, BrowserWindow, screen } from 'electron'
 import { join } from 'node:path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerIpcHandlers } from './ipc'
 import { setMainWindow } from './windowRegistry'
 import { refreshAllPodcasts } from './subscriptions'
+import { authHeaderForHost } from './privateFeeds'
 import { getSnapshot, persist, persistNow } from './persistence'
 import type { WindowBounds } from './persistence'
+import { hasSession } from './sync/auth'
+import { pullAndMerge, pushDirty, runSyncCycle } from './sync/sync'
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000
 const INITIAL_REFRESH_DELAY_MS = 5000
+const SYNC_INTERVAL_MS = 2 * 60 * 1000
+const QUIT_SYNC_TIMEOUT_MS = 3000
 
 const DEFAULT_WIDTH = 1280
 const DEFAULT_HEIGHT = 800
@@ -46,6 +56,7 @@ function createWindow(): void {
     show: false,
     autoHideMenuBar: true,
     backgroundColor: '#eef0f4',
+    ...(is.dev ? { icon: join(__dirname, '../../build/icon.ico') } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: false
@@ -86,16 +97,42 @@ function createWindow(): void {
 // Dev builds must never share a userData directory (and therefore never share
 // empire-pod-data.json) with the packaged app — otherwise local testing can
 // read, overwrite, or race against a real user's actual subscriptions/queue.
-app.setName(is.dev ? 'Empire Pod Dev' : 'Empire Pod')
+// EMPIRE_POD_INSTANCE additionally splits dev builds from each other, so two
+// `npm run dev` processes can run side by side as two independent "devices"
+// against the same Supabase project — used to verify cloud sync locally
+// without needing two physical machines.
+const instanceSuffix = process.env.EMPIRE_POD_INSTANCE ? ` ${process.env.EMPIRE_POD_INSTANCE}` : ''
+app.setName(is.dev ? `Empire Pod Dev${instanceSuffix}` : 'Empire Pod')
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   electronApp.setAppUserModelId('com.empirepod.app')
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
+  // The <audio> element streaming episode files can't attach an Authorization
+  // header itself, so private-feed episodes (gated behind the same
+  // credentials as their RSS feed) would otherwise fail to load. Attach the
+  // saved credentials for any outgoing request whose host matches a private
+  // feed's host — this also transparently covers Range requests, so seeking
+  // still works.
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const host = new URL(details.url).host
+    const authHeader = authHeaderForHost(host)
+    if (authHeader) details.requestHeaders['Authorization'] = authHeader
+    callback({ requestHeaders: details.requestHeaders })
+  })
+
   registerIpcHandlers()
+
+  // Pull-and-merge before the window exists so hydrate.ts's existing loadX()
+  // calls just see already-reconciled state — the renderer never needs to
+  // know cloud sync exists. Only runs at all if a session is already saved;
+  // an install that's never signed in behaves exactly as it always has.
+  if (await hasSession()) {
+    await pullAndMerge().catch((err) => console.error('Initial sync pull failed:', err))
+  }
   createWindow()
 
   setTimeout(() => {
@@ -104,6 +141,9 @@ app.whenReady().then(() => {
   setInterval(() => {
     refreshAllPodcasts().catch((err) => console.error('Background feed refresh failed:', err))
   }, REFRESH_INTERVAL_MS)
+  setInterval(() => {
+    runSyncCycle().catch((err) => console.error('Background sync failed:', err))
+  }, SYNC_INTERVAL_MS)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
@@ -118,7 +158,19 @@ app.on('window-all-closed', () => {
 
 // Writes are debounced (see persist() in persistence.ts) — flush synchronously
 // before the process actually exits so a change made just before quitting
-// (mark-as-played, add a feed, etc.) is never silently lost.
-app.on('before-quit', () => {
+// (mark-as-played, add a feed, etc.) is never silently lost. The cloud sync
+// push is async, though, so it needs an explicit deferral (Electron's
+// before-quit doesn't block quitting on its own) — capped so a dead network
+// never hangs the app on quit; worst case that last edit pushes on the next
+// launch's or next device's sync cycle instead.
+let quitting = false
+app.on('before-quit', (event) => {
   persistNow()
+  if (quitting) return
+  event.preventDefault()
+  quitting = true
+  Promise.race([
+    pushDirty().catch((err) => console.error('Final sync push failed:', err)),
+    new Promise((resolve) => setTimeout(resolve, QUIT_SYNC_TIMEOUT_MS))
+  ]).finally(() => app.quit())
 })

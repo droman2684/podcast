@@ -74,3 +74,20 @@ export interface PodcastPreview {
   description: string
   category: string | null
 }
+
+// A recent episode surfaced by trendingEpisodes.ts — from a show that's
+// currently top-charting in a category, not a measure of real per-episode
+// play counts (no public API exposes those). See recommendations.ts for the
+// underlying chart data.
+export interface TrendingEpisode {
+  id: string
+  title: string
+  audioUrl: string
+  artworkUrl: string | null
+  durationSec: number
+  pubDateIso: string
+  podcastId: string
+  podcastFeedUrl: string
+  podcastName: string
+  podcastArtworkUrl: string | null
+}

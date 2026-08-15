@@ -5,6 +5,7 @@ import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
 import EpisodeArtwork from '@renderer/components/ui/EpisodeArtwork'
 import { formatSeconds, formatRemaining } from '@renderer/utils/duration'
 import { computeProgress } from '@renderer/utils/progress'
+import { useScrubHover } from '@renderer/hooks/useScrubHover'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
 import type { Chapter } from '@renderer/types'
 import styles from './NowPlayingExpanded.module.css'
@@ -56,6 +57,8 @@ function NowPlayingExpanded(): React.JSX.Element | null {
     }
   }, [current?.chaptersUrl])
 
+  const { hoverFraction, hoverTimeSec, onMouseMove, onMouseLeave } = useScrubHover(durationSec)
+
   if (!expanded || !current) return null
 
   const progressPct = durationSec > 0 ? (currentTimeSec / durationSec) * 100 : 0
@@ -95,16 +98,28 @@ function NowPlayingExpanded(): React.JSX.Element | null {
           </div>
 
           <div className={styles.progressBlock}>
-            <div className={styles.progressTrack} onClick={handleSeekClick}>
-              <div className={styles.progressFill} style={{ width: `${progressPct}%` }} />
-              {durationSec > 0 &&
-                chapters.map((chapter, i) => (
-                  <div
-                    key={i}
-                    className={styles.chapterTick}
-                    style={{ left: `${(chapter.startTime / durationSec) * 100}%` }}
-                  />
-                ))}
+            <div
+              className={styles.trackHit}
+              onClick={handleSeekClick}
+              onMouseMove={onMouseMove}
+              onMouseLeave={onMouseLeave}
+            >
+              {hoverFraction !== null && hoverTimeSec !== null && (
+                <div className={styles.hoverTooltip} style={{ left: `${hoverFraction * 100}%` }}>
+                  {formatSeconds(hoverTimeSec)}
+                </div>
+              )}
+              <div className={styles.progressTrack}>
+                <div className={styles.progressFill} style={{ width: `${progressPct}%` }} />
+                {durationSec > 0 &&
+                  chapters.map((chapter, i) => (
+                    <div
+                      key={i}
+                      className={styles.chapterTick}
+                      style={{ left: `${(chapter.startTime / durationSec) * 100}%` }}
+                    />
+                  ))}
+              </div>
             </div>
             <div className={styles.times}>
               <span>{formatSeconds(currentTimeSec)}</span>

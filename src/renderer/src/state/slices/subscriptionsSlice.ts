@@ -1,21 +1,28 @@
 import type { StateCreator } from 'zustand'
 import type { Podcast, Episode } from '@renderer/types'
+import type { OpmlImportResult } from '@shared/ipcChannels'
 import type { AppState } from '../store'
 
 function countUnplayed(episodes: Episode[]): number {
   return episodes.filter((e) => !e.played).length
 }
 
+export type SyncStatus = 'idle' | 'syncing'
+
 export interface SubscriptionsSlice {
   podcasts: Podcast[]
   episodesByPodcast: Record<string, Episode[]>
   podcastsLoading: boolean
+  syncStatus: SyncStatus
+  lastSyncNewCount: number
   loadSubscriptions: () => Promise<void>
   loadEpisodes: (podcastId: string) => Promise<void>
   subscribe: (feedUrl: string) => Promise<Podcast>
+  importOpml: () => Promise<OpmlImportResult | null>
   unsubscribe: (podcastId: string) => Promise<void>
   refreshPodcast: (podcastId: string) => Promise<void>
   markEpisodePlayed: (episodeId: string, played: boolean) => Promise<void>
+  setEpisodeDuration: (episodeId: string, durationSec: number) => Promise<void>
   setPodcastArtwork: (podcastId: string, dataUrl: string | null) => Promise<void>
   initSubscriptionUpdates: () => void
 }
@@ -34,6 +41,8 @@ export const createSubscriptionsSlice: StateCreator<AppState, [], [], Subscripti
   podcasts: [],
   episodesByPodcast: {},
   podcastsLoading: false,
+  syncStatus: 'idle',
+  lastSyncNewCount: 0,
 
   loadSubscriptions: async () => {
     set({ podcastsLoading: true })
@@ -57,6 +66,20 @@ export const createSubscriptionsSlice: StateCreator<AppState, [], [], Subscripti
     }))
     await get().loadEpisodes(podcast.id)
     return podcast
+  },
+
+  importOpml: async () => {
+    const result = await window.api.subscriptions.importOpml()
+    if (!result) return null
+    if (result.imported.length > 0) {
+      set((state) => {
+        const existingIds = new Set(state.podcasts.map((p) => p.id))
+        const newOnes = result.imported.filter((p) => !existingIds.has(p.id))
+        return { podcasts: [...state.podcasts, ...newOnes] }
+      })
+      await Promise.all(result.imported.map((p) => get().loadEpisodes(p.id)))
+    }
+    return result
   },
 
   unsubscribe: async (podcastId) => {
@@ -103,6 +126,20 @@ export const createSubscriptionsSlice: StateCreator<AppState, [], [], Subscripti
     await window.api.episodes.markPlayed(episodeId, played)
   },
 
+  setEpisodeDuration: async (episodeId, durationSec) => {
+    set((state) => {
+      const next = { ...state.episodesByPodcast }
+      for (const podcastId of Object.keys(next)) {
+        const idx = next[podcastId].findIndex((e) => e.id === episodeId)
+        if (idx === -1) continue
+        next[podcastId] = next[podcastId].map((e, i) => (i === idx ? { ...e, durationSec } : e))
+        break
+      }
+      return { episodesByPodcast: next }
+    })
+    await window.api.episodes.setDuration(episodeId, durationSec)
+  },
+
   setPodcastArtwork: async (podcastId, dataUrl) => {
     const podcast = await window.api.subscriptions.setArtwork(podcastId, dataUrl)
     set((state) => ({
@@ -120,6 +157,9 @@ export const createSubscriptionsSlice: StateCreator<AppState, [], [], Subscripti
           : [...state.podcasts, podcast],
         episodesByPodcast: { ...state.episodesByPodcast, [podcast.id]: episodes }
       }))
+    })
+    window.api.subscriptions.onSyncStatus(({ status, newEpisodeCount }) => {
+      set({ syncStatus: status, lastSyncNewCount: newEpisodeCount ?? 0 })
     })
   }
 })

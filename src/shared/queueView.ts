@@ -2,6 +2,22 @@ import type { Episode } from './types'
 
 export type QueueSortMode = 'manual' | 'newest' | 'oldest' | 'shortest' | 'longest'
 
+export const QUEUE_SORT_MODES: QueueSortMode[] = ['manual', 'newest', 'oldest', 'shortest', 'longest']
+
+export type QueueViewMode = 'grid' | 'list'
+
+export interface QueuePrefs {
+  sortMode: QueueSortMode
+  groupByShow: boolean
+  queueView: QueueViewMode
+}
+
+export const DEFAULT_QUEUE_PREFS: QueuePrefs = {
+  sortMode: 'manual',
+  groupByShow: false,
+  queueView: 'list'
+}
+
 export function sortEpisodes(episodes: Episode[], mode: QueueSortMode): Episode[] {
   if (mode === 'manual') return episodes
   const sorted = [...episodes]

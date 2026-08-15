@@ -15,6 +15,7 @@ function EpisodeScreen(): React.JSX.Element {
   const loadEpisodesAction = useAppStore((s) => s.loadEpisodes)
   const unsubscribe = useAppStore((s) => s.unsubscribe)
   const setPodcastArtwork = useAppStore((s) => s.setPodcastArtwork)
+  const refreshPodcastAction = useAppStore((s) => s.refreshPodcast)
   const goTo = useAppStore((s) => s.goTo)
 
   const currentEpisodeId = useAppStore((s) => s.currentEpisodeId)
@@ -30,6 +31,7 @@ function EpisodeScreen(): React.JSX.Element {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploadingArt, setUploadingArt] = useState(false)
+  const [reimporting, setReimporting] = useState(false)
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
 
   const toggleExpanded = (episodeId: string): void => {
@@ -72,6 +74,18 @@ function EpisodeScreen(): React.JSX.Element {
   const handleUnsubscribe = async (): Promise<void> => {
     await unsubscribe(podcast.id)
     goTo('library')
+  }
+
+  const handleReimport = async (): Promise<void> => {
+    if (reimporting) return
+    setReimporting(true)
+    try {
+      await refreshPodcastAction(podcast.id)
+    } catch (err) {
+      console.error('Failed to reimport episodes:', err)
+    } finally {
+      setReimporting(false)
+    }
   }
 
   const handleArtworkFile = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
@@ -131,6 +145,15 @@ function EpisodeScreen(): React.JSX.Element {
             </Pill>
             <Pill variant="secondary" onClick={() => openSettings(podcast.id)}>
               Settings
+            </Pill>
+            <Pill variant="secondary" onClick={handleReimport}>
+              {reimporting ? (
+                <>
+                  <Loader2 size={12} className="spin" /> Reimporting…
+                </>
+              ) : (
+                'Reimport Episodes'
+              )}
             </Pill>
           </div>
         </div>
