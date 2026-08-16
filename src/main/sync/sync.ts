@@ -33,6 +33,42 @@ function unwrap<T>(result: { data: T; error: { message: string } | null }): T {
   return result.data
 }
 
+const PAGE_SIZE = 1000
+
+// Supabase caps a single .select() at 1000 rows by default — silently, with
+// no error, just a truncated result. episode_played in particular can
+// easily exceed that for a library with a lot of listening history (one
+// real account here has 16,000+), and a truncated pull makes every row past
+// 1000 look never-synced even though it exists.
+//
+// Callers pass { count: 'exact' } in their .select() — the first page's
+// response includes the true row count, so every remaining page fires in
+// parallel instead of one-at-a-time. Fetching sequentially made a pull with
+// 16,000+ episode_played rows take the better part of a minute.
+async function fetchAllRows<T>(
+  query: (
+    from: number,
+    to: number
+  ) => PromiseLike<{ data: T[] | null; error: { message: string } | null; count?: number | null }>
+): Promise<T[]> {
+  const first = await query(0, PAGE_SIZE - 1)
+  if (first.error) throw new Error(first.error.message)
+  const firstPage = first.data ?? []
+  const total = first.count ?? firstPage.length
+  if (total <= firstPage.length) return firstPage
+
+  const remainingStarts: number[] = []
+  for (let from = PAGE_SIZE; from < total; from += PAGE_SIZE) remainingStarts.push(from)
+
+  const restResults = await Promise.all(remainingStarts.map((from) => query(from, from + PAGE_SIZE - 1)))
+  const rest: T[] = []
+  for (const result of restResults) {
+    if (result.error) throw new Error(result.error.message)
+    rest.push(...(result.data ?? []))
+  }
+  return [...firstPage, ...rest]
+}
+
 async function currentUserId(): Promise<string | null> {
   const supabase = getSupabase()
   if (!supabase) {
@@ -61,8 +97,10 @@ export async function pullAndMerge(): Promise<void> {
 
   const snapshot = getSnapshot()
 
-  const podcastRows = unwrap(await supabase.from('podcasts').select('*').eq('user_id', userId))
-  for (const row of podcastRows ?? []) {
+  const podcastRows = await fetchAllRows((from, to) =>
+    supabase.from('podcasts').select('*', { count: 'exact' }).eq('user_id', userId).range(from, to)
+  )
+  for (const row of podcastRows) {
     const key = `podcast:${row.id}`
     if (!isRemoteNewer(snapshot, key, row.updated_at)) continue
     if (row.deleted_at) {
@@ -83,20 +121,20 @@ export async function pullAndMerge(): Promise<void> {
     touchSync(key, new Date(row.updated_at).getTime())
   }
 
-  const settingsRows = unwrap(
-    await supabase.from('podcast_settings').select('*').eq('user_id', userId)
+  const settingsRows = await fetchAllRows((from, to) =>
+    supabase.from('podcast_settings').select('*', { count: 'exact' }).eq('user_id', userId).range(from, to)
   )
-  for (const row of settingsRows ?? []) {
+  for (const row of settingsRows) {
     const key = `podcastSettings:${row.podcast_id}`
     if (!isRemoteNewer(snapshot, key, row.updated_at)) continue
     snapshot.podcastSettings[row.podcast_id] = { notify: row.notify }
     touchSync(key, new Date(row.updated_at).getTime())
   }
 
-  const episodeRows = unwrap(
-    await supabase.from('episode_played').select('*').eq('user_id', userId)
+  const episodeRows = await fetchAllRows((from, to) =>
+    supabase.from('episode_played').select('*', { count: 'exact' }).eq('user_id', userId).range(from, to)
   )
-  for (const row of episodeRows ?? []) {
+  for (const row of episodeRows) {
     const key = `episodePlayed:${row.episode_id}`
     if (!isRemoteNewer(snapshot, key, row.updated_at)) continue
     const episodes = snapshot.episodesByPodcast[row.podcast_id]
@@ -115,8 +153,10 @@ export async function pullAndMerge(): Promise<void> {
     touchSync(key, new Date(row.updated_at).getTime())
   }
 
-  const stationRows = unwrap(await supabase.from('stations').select('*').eq('user_id', userId))
-  for (const row of stationRows ?? []) {
+  const stationRows = await fetchAllRows((from, to) =>
+    supabase.from('stations').select('*', { count: 'exact' }).eq('user_id', userId).range(from, to)
+  )
+  for (const row of stationRows) {
     const key = `station:${row.id}`
     if (!isRemoteNewer(snapshot, key, row.updated_at)) continue
     if (row.deleted_at) {
@@ -135,10 +175,10 @@ export async function pullAndMerge(): Promise<void> {
     touchSync(key, new Date(row.updated_at).getTime())
   }
 
-  const privateFeedRows = unwrap(
-    await supabase.from('private_feeds').select('*').eq('user_id', userId)
+  const privateFeedRows = await fetchAllRows((from, to) =>
+    supabase.from('private_feeds').select('*', { count: 'exact' }).eq('user_id', userId).range(from, to)
   )
-  for (const row of privateFeedRows ?? []) {
+  for (const row of privateFeedRows) {
     const key = `privateFeed:${row.id}`
     if (!isRemoteNewer(snapshot, key, row.updated_at)) continue
     if (row.deleted_at) {
@@ -180,10 +220,10 @@ export async function pullAndMerge(): Promise<void> {
     touchSync('queuePrefs', new Date(prefsRow.updated_at).getTime())
   }
 
-  const positionRows = unwrap(
-    await supabase.from('playback_positions').select('*').eq('user_id', userId)
+  const positionRows = await fetchAllRows((from, to) =>
+    supabase.from('playback_positions').select('*', { count: 'exact' }).eq('user_id', userId).range(from, to)
   )
-  for (const row of positionRows ?? []) {
+  for (const row of positionRows) {
     const key = `playbackPosition:${row.episode_id}`
     if (!isRemoteNewer(snapshot, key, row.updated_at)) continue
     snapshot.playbackPositions[row.episode_id] = row.position_sec
@@ -193,7 +233,7 @@ export async function pullAndMerge(): Promise<void> {
   snapshot.syncLastPulledAt = Date.now()
   persist()
   console.log(
-    `[sync] pull complete: ${podcastRows?.length ?? 0} podcast rows, ${stationRows?.length ?? 0} station rows seen`
+    `[sync] pull complete: ${podcastRows.length} podcast rows, ${stationRows.length} station rows seen`
   )
 }
 
@@ -404,7 +444,8 @@ export async function pushDirty(): Promise<void> {
         await supabase.from(pending.table as SyncTable).upsert({
           user_id: userId,
           id: pending.localId,
-          deleted_at: new Date(pending.deletedAt).toISOString()
+          deleted_at: new Date(pending.deletedAt).toISOString(),
+          updated_at: new Date(pending.deletedAt).toISOString()
         })
       )
       snapshot.syncPendingDeletes = snapshot.syncPendingDeletes.filter((p) => p !== pending)
