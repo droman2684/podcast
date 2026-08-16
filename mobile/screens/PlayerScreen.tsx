@@ -5,6 +5,7 @@ import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import { removeFromQueueOnFinish } from '../lib/queueHelpers'
 import Artwork from '../components/Artwork'
+import { colors, radii } from '../theme'
 
 const SAVE_INTERVAL_MS = 5000
 const SKIP_SEC = 15
@@ -151,30 +152,30 @@ export default function PlayerScreen({ episode, podcast, onBack, onAdvance }: Pr
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingTop: 60, paddingHorizontal: 24 },
-  back: { color: '#FF5910', marginBottom: 16, fontSize: 15 },
+  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60, paddingHorizontal: 24 },
+  back: { color: colors.accent, marginBottom: 16, fontSize: 15 },
   artworkWrap: { alignItems: 'center', marginBottom: 20 },
-  podcastName: { fontSize: 13, color: '#888', marginBottom: 4, textAlign: 'center' },
-  title: { fontSize: 18, fontWeight: '700', marginBottom: 20, textAlign: 'center' },
+  podcastName: { fontSize: 13, color: colors.textMuted, marginBottom: 4, textAlign: 'center' },
+  title: { fontSize: 18, fontWeight: '700', marginBottom: 20, textAlign: 'center', color: colors.textPrimary },
   bar: {
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#eee',
+    backgroundColor: '#e0e0e6',
     overflow: 'hidden',
     marginBottom: 6
   },
-  barFill: { height: '100%', backgroundColor: '#FF5910' },
+  barFill: { height: '100%', backgroundColor: colors.accent },
   timeRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 },
-  timeText: { fontSize: 12, color: '#888' },
+  timeText: { fontSize: 12, color: colors.textMuted },
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: 16
   },
-  skipBtn: { fontSize: 14, fontWeight: '600', color: '#555', width: 60, textAlign: 'center' },
+  skipBtn: { fontSize: 14, fontWeight: '600', color: colors.textSecondary, width: 60, textAlign: 'center' },
   playButton: {
-    backgroundColor: '#FF5910',
+    backgroundColor: colors.accent,
     borderRadius: 36,
     width: 88,
     height: 88,
@@ -182,6 +183,12 @@ const styles = StyleSheet.create({
     justifyContent: 'center'
   },
   playButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  speedBtn: { alignSelf: 'center', paddingHorizontal: 14, paddingVertical: 8, backgroundColor: '#f0f0f0', borderRadius: 16 },
-  speedText: { fontSize: 13, fontWeight: '700', color: '#555' }
+  speedBtn: {
+    alignSelf: 'center',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    backgroundColor: '#e8e8ed',
+    borderRadius: radii.pill
+  },
+  speedText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary }
 })

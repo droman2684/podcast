@@ -24,6 +24,8 @@ export default function App(): React.JSX.Element {
   const initAuth = useStore((s) => s.initAuth)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
+  const libraryLoaded = useStore((s) => s.libraryLoaded)
+  const loadLibrary = useStore((s) => s.loadLibrary)
 
   const [tab, setTab] = useState<Tab>('library')
   const [route, setRoute] = useState<Route>({ name: 'tabs' })
@@ -31,6 +33,12 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     initAuth()
   }, [initAuth])
+
+  // Loads once per sign-in, not once per Library-tab visit — LibraryScreen
+  // itself only re-fetches on an explicit pull-to-refresh.
+  useEffect(() => {
+    if (signedIn && !libraryLoaded) loadLibrary()
+  }, [signedIn, libraryLoaded, loadLibrary])
 
   if (authLoading) {
     return (
@@ -91,6 +99,7 @@ export default function App(): React.JSX.Element {
         podcast={podcast}
         onBack={goToTabs}
         onPlay={(episodeId) => goToPlayer(podcast.id, episodeId)}
+        onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
       />
     ) : (
       <LibraryScreen

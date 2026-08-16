@@ -12,6 +12,7 @@ import type { DiscoverPodcast, TrendingEpisode } from '@shared/types'
 import { CATEGORY_GENRE_IDS, getCategoryPicks, getTrendingEpisodes, getPodcastOfTheDay } from '../lib/itunes'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
+import { colors, radii, cardShadow } from '../theme'
 
 const CATEGORIES = Object.keys(CATEGORY_GENRE_IDS)
 
@@ -135,8 +136,8 @@ export default function DiscoverScreen(): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingTop: 60 },
-  title: { fontSize: 24, fontWeight: '700', paddingHorizontal: 20, marginBottom: 12 },
+  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
+  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, paddingHorizontal: 20, marginBottom: 12 },
   dailyPick: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -144,34 +145,45 @@ const styles = StyleSheet.create({
     marginHorizontal: 20,
     marginBottom: 14,
     padding: 10,
-    borderRadius: 12,
-    backgroundColor: '#fff5ef'
+    borderRadius: radii.card,
+    backgroundColor: colors.accentBg
   },
-  dailyPickLabel: { fontSize: 11, color: '#FF5910', fontWeight: '700', textTransform: 'uppercase' },
-  dailyPickName: { fontSize: 15, fontWeight: '600', marginTop: 2 },
+  dailyPickLabel: { fontSize: 11, color: colors.accent, fontWeight: '700', textTransform: 'uppercase' },
+  dailyPickName: { fontSize: 15, fontWeight: '600', marginTop: 2, color: colors.textPrimary },
   chipRow: { paddingLeft: 20, marginBottom: 8, flexGrow: 0 },
   chip: {
     paddingHorizontal: 14,
     paddingVertical: 8,
-    borderRadius: 16,
-    backgroundColor: '#f0f0f0',
+    borderRadius: radii.pill,
+    backgroundColor: '#e8e8ed',
     marginRight: 8
   },
-  chipActive: { backgroundColor: '#FF5910' },
-  chipText: { fontSize: 13, fontWeight: '600', color: '#555' },
+  chipActive: { backgroundColor: colors.accent },
+  chipText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary },
   chipTextActive: { color: '#fff' },
   picksRow: { paddingHorizontal: 20, gap: 12 },
   pickCard: { width: 90 },
-  pickName: { fontSize: 12, fontWeight: '600', marginTop: 6 },
-  pickAction: { fontSize: 11, color: '#FF5910', fontWeight: '700', marginTop: 2 },
-  sectionTitle: { fontSize: 16, fontWeight: '700', paddingHorizontal: 20, marginTop: 16, marginBottom: 8 },
+  pickName: { fontSize: 12, fontWeight: '600', marginTop: 6, color: colors.textPrimary },
+  pickAction: { fontSize: 11, color: colors.accent, fontWeight: '700', marginTop: 2 },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    paddingHorizontal: 20,
+    marginTop: 16,
+    marginBottom: 8
+  },
   trendingRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 8
+    marginHorizontal: 20,
+    marginBottom: 8,
+    padding: 8,
+    backgroundColor: colors.surface,
+    borderRadius: radii.item,
+    ...cardShadow
   },
-  trendingTitle: { fontSize: 13, fontWeight: '600' },
-  trendingPodcast: { fontSize: 11, color: '#888', marginTop: 2 }
+  trendingTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+  trendingPodcast: { fontSize: 11, color: colors.textMuted, marginTop: 2 }
 })

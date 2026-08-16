@@ -4,6 +4,7 @@ import type { DiscoverPodcast } from '@shared/types'
 import { searchPodcasts } from '../lib/itunes'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
+import { colors, radii, cardShadow } from '../theme'
 
 export default function SearchScreen(): React.JSX.Element {
   const podcasts = useStore((s) => s.podcasts)
@@ -62,7 +63,7 @@ export default function SearchScreen(): React.JSX.Element {
           const subscribed = subscribedIds.has(item.id)
           return (
             <View style={styles.row}>
-              <Artwork url={item.artworkUrl} size={48} radius={8} />
+              <Artwork url={item.artworkUrl} size={48} radius={radii.artworkSm} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.name} numberOfLines={1}>
                   {item.name}
@@ -89,32 +90,37 @@ export default function SearchScreen(): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingTop: 60 },
+  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
   header: { paddingHorizontal: 20, marginBottom: 12, gap: 10 },
-  title: { fontSize: 24, fontWeight: '700' },
+  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary },
   input: {
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 10,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.input,
     padding: 10,
     fontSize: 15
   },
-  error: { color: '#d33', paddingHorizontal: 20, marginBottom: 8 },
+  error: { color: colors.danger, paddingHorizontal: 20, marginBottom: 8 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 10
+    marginHorizontal: 20,
+    marginBottom: 8,
+    padding: 10,
+    backgroundColor: colors.surface,
+    borderRadius: radii.item,
+    ...cardShadow
   },
-  name: { fontSize: 14, fontWeight: '600' },
-  author: { fontSize: 12, color: '#888', marginTop: 2 },
+  name: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  author: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   subBtn: {
-    backgroundColor: '#FF5910',
+    backgroundColor: colors.accent,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8
   },
-  subBtnDone: { backgroundColor: '#ccc' },
+  subBtnDone: { backgroundColor: colors.textDisabled },
   subBtnText: { color: '#fff', fontWeight: '600', fontSize: 12 }
 })

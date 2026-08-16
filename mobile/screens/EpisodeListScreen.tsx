@@ -1,7 +1,9 @@
 import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native'
+import { Settings } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
+import { colors, radii, cardShadow } from '../theme'
 
 function formatDuration(sec: number): string {
   if (!sec) return ''
@@ -15,9 +17,10 @@ interface Props {
   podcast: Podcast
   onBack: () => void
   onPlay: (episodeId: string) => void
+  onOpenSettings: (podcastId: string) => void
 }
 
-export default function EpisodeListScreen({ podcast, onBack, onPlay }: Props): React.JSX.Element {
+export default function EpisodeListScreen({ podcast, onBack, onPlay, onOpenSettings }: Props): React.JSX.Element {
   const episodes = useStore((s) => s.episodesByPodcast[podcast.id] ?? [])
   const positions = useStore((s) => s.positions)
   const queue = useStore((s) => s.queue)
@@ -30,7 +33,7 @@ export default function EpisodeListScreen({ podcast, onBack, onPlay }: Props): R
     const queued = queue.includes(item.id)
     return (
       <Pressable style={styles.row} onPress={() => onPlay(item.id)}>
-        <Artwork url={item.artworkUrl ?? podcast.artworkUrl} size={44} radius={7} />
+        <Artwork url={item.artworkUrl ?? podcast.artworkUrl} size={44} radius={radii.artworkSm} />
         <View style={{ flex: 1 }}>
           <Text style={styles.epTitle} numberOfLines={2}>
             {item.title}
@@ -59,32 +62,46 @@ export default function EpisodeListScreen({ podcast, onBack, onPlay }: Props): R
         <Pressable onPress={onBack}>
           <Text style={styles.back}>{'‹ Library'}</Text>
         </Pressable>
-        <Text style={styles.title}>{podcast.name}</Text>
+        <View style={styles.titleRow}>
+          <Text style={styles.title} numberOfLines={1}>
+            {podcast.name}
+          </Text>
+          <Pressable hitSlop={10} onPress={() => onOpenSettings(podcast.id)}>
+            <Settings size={18} color={colors.textMuted} />
+          </Pressable>
+        </View>
       </View>
-      <FlatList data={episodes} keyExtractor={(e) => e.id} renderItem={renderItem} />
+      <FlatList
+        data={episodes}
+        keyExtractor={(e) => e.id}
+        contentContainerStyle={styles.listContent}
+        renderItem={renderItem}
+      />
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingTop: 60 },
+  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
   header: { paddingHorizontal: 20, marginBottom: 12 },
-  back: { color: '#FF5910', marginBottom: 8, fontSize: 15 },
-  title: { fontSize: 22, fontWeight: '700' },
+  back: { color: colors.accent, marginBottom: 8, fontSize: 15 },
+  titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, flex: 1, marginRight: 12 },
+  listContent: { paddingHorizontal: 20, gap: 8, paddingBottom: 20 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: '#eee'
+    backgroundColor: colors.surface,
+    borderRadius: radii.item,
+    padding: 10,
+    ...cardShadow
   },
-  epTitle: { fontSize: 15, fontWeight: '600' },
-  epMeta: { fontSize: 12, color: '#888', marginTop: 4 },
+  epTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
+  epMeta: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
   iconBtn: {
     fontSize: 16,
-    color: '#888',
+    color: colors.textMuted,
     fontWeight: '700',
     width: 26,
     height: 26,
@@ -94,5 +111,5 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f0f0',
     overflow: 'hidden'
   },
-  iconBtnActive: { color: '#fff', backgroundColor: '#FF5910' }
+  iconBtnActive: { color: '#fff', backgroundColor: colors.accent }
 })

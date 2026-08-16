@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from 'react-native'
 import { useStore } from '../state/store'
+import { colors, radii } from '../theme'
 
 export default function SignInScreen(): React.JSX.Element {
   const signIn = useStore((s) => s.signIn)
@@ -63,25 +64,26 @@ export default function SignInScreen(): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: '#fff' },
-  title: { fontSize: 28, fontWeight: '700', marginBottom: 24, textAlign: 'center' },
+  container: { flex: 1, justifyContent: 'center', padding: 24, backgroundColor: colors.bg },
+  title: { fontSize: 28, fontWeight: '700', marginBottom: 24, textAlign: 'center', color: colors.textPrimary },
   input: {
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 10,
+    borderColor: colors.borderStrong,
+    borderRadius: radii.input,
     padding: 12,
     marginBottom: 12,
     fontSize: 16
   },
-  error: { color: '#d33', marginBottom: 12 },
+  error: { color: colors.danger, marginBottom: 12 },
   button: {
-    backgroundColor: '#FF5910',
-    borderRadius: 10,
+    backgroundColor: colors.accent,
+    borderRadius: radii.input,
     padding: 14,
     alignItems: 'center',
     marginBottom: 10
   },
-  secondary: { backgroundColor: '#888' },
+  secondary: { backgroundColor: colors.navInactive },
   buttonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
-  helper: { textAlign: 'center', color: '#888', fontSize: 12, marginTop: 8 }
+  helper: { textAlign: 'center', color: colors.textMuted, fontSize: 12, marginTop: 8 }
 })

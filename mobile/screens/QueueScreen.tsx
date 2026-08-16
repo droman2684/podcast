@@ -2,6 +2,8 @@ import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
+import SwipeToDelete from '../components/SwipeToDelete'
+import { colors, radii, cardShadow } from '../theme'
 
 interface QueueItem {
   podcast: Podcast
@@ -37,22 +39,19 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
       <FlatList
         data={items}
         keyExtractor={(item) => item.episode.id}
+        contentContainerStyle={styles.listContent}
         renderItem={({ item }) => (
-          <Pressable
-            style={styles.row}
-            onPress={() => onPlay(item.podcast.id, item.episode.id)}
-          >
-            <Artwork url={item.episode.artworkUrl ?? item.podcast.artworkUrl} size={44} radius={7} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.epTitle} numberOfLines={2}>
-                {item.episode.title}
-              </Text>
-              <Text style={styles.podcastName}>{item.podcast.name}</Text>
-            </View>
-            <Pressable hitSlop={10} onPress={() => removeFromQueue(item.episode.id)}>
-              <Text style={styles.removeBtn}>✕</Text>
+          <SwipeToDelete deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
+            <Pressable style={styles.row} onPress={() => onPlay(item.podcast.id, item.episode.id)}>
+              <Artwork url={item.episode.artworkUrl ?? item.podcast.artworkUrl} size={44} radius={radii.artworkSm} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.epTitle} numberOfLines={2}>
+                  {item.episode.title}
+                </Text>
+                <Text style={styles.podcastName}>{item.podcast.name}</Text>
+              </View>
             </Pressable>
-          </Pressable>
+          </SwipeToDelete>
         )}
         ListEmptyComponent={
           <Text style={styles.empty}>Queue is empty. Add episodes from any episode list.</Text>
@@ -63,20 +62,20 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff', paddingTop: 60 },
-  header: { paddingHorizontal: 20, marginBottom: 12 },
-  title: { fontSize: 24, fontWeight: '700' },
+  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
+  header: { paddingHorizontal: 20, marginBottom: 16 },
+  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary },
+  listContent: { paddingHorizontal: 20, gap: 8, paddingBottom: 20 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: '#eee'
+    backgroundColor: colors.surface,
+    borderRadius: radii.item,
+    padding: 10,
+    ...cardShadow
   },
-  epTitle: { fontSize: 15, fontWeight: '600' },
-  podcastName: { fontSize: 12, color: '#888', marginTop: 2 },
-  removeBtn: { fontSize: 16, color: '#d33', paddingHorizontal: 6 },
-  empty: { textAlign: 'center', color: '#888', marginTop: 40, paddingHorizontal: 30 }
+  epTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+  podcastName: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40, paddingHorizontal: 30 }
 })
