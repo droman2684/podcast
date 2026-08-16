@@ -58,6 +58,7 @@ function unwrap<T>(result: { data: T; error: { message: string } | null }): T {
 
 interface AppState {
   authLoading: boolean
+  authError: string | null
   signedIn: boolean
   userEmail: string | null
 
@@ -212,6 +213,7 @@ async function mapWithConcurrency<T, R>(
 
 export const useStore = create<AppState>((set, get) => ({
   authLoading: true,
+  authError: null,
   signedIn: false,
   userEmail: null,
 
@@ -274,15 +276,36 @@ export const useStore = create<AppState>((set, get) => ({
   playbackRate: 1,
 
   initAuth: async () => {
-    const { data } = await supabase.auth.getSession()
-    set({
-      signedIn: data.session !== null,
-      userEmail: data.session?.user.email ?? null,
-      authLoading: false
-    })
-    supabase.auth.onAuthStateChange((_event, session) => {
-      set({ signedIn: session !== null, userEmail: session?.user.email ?? null })
-    })
+    // getSession() hanging (a slow/unreachable network on first launch, a
+    // stuck AsyncStorage read, etc.) used to leave authLoading stuck true
+    // forever — the app would sit on a bare, easy-to-miss spinner that read
+    // as "just a white screen" with no way to tell what was wrong or to
+    // retry. A hard timeout plus a try/catch ensures authLoading always
+    // resolves one way or the other, and any real error is visible instead
+    // of silently swallowed as an unhandled promise rejection.
+    try {
+      const result = await Promise.race([
+        supabase.auth.getSession(),
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(() => reject(new Error('Timed out checking for a saved session')), 10000)
+        )
+      ])
+      set({
+        signedIn: result.data.session !== null,
+        userEmail: result.data.session?.user.email ?? null,
+        authLoading: false,
+        authError: null
+      })
+      supabase.auth.onAuthStateChange((_event, session) => {
+        set({ signedIn: session !== null, userEmail: session?.user.email ?? null })
+      })
+    } catch (err) {
+      console.error('[initAuth] failed:', err)
+      set({
+        authLoading: false,
+        authError: err instanceof Error ? err.message : String(err)
+      })
+    }
   },
 
   signIn: async (email, password) => {

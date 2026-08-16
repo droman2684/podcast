@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { View, ActivityIndicator } from 'react-native'
+import { View, Text, ActivityIndicator } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { useStore } from './state/store'
 import SignInScreen from './screens/SignInScreen'
@@ -27,6 +27,7 @@ type Route =
 
 export default function App(): React.JSX.Element {
   const authLoading = useStore((s) => s.authLoading)
+  const authError = useStore((s) => s.authError)
   const signedIn = useStore((s) => s.signedIn)
   const initAuth = useStore((s) => s.initAuth)
   const loadSettings = useStore((s) => s.loadSettings)
@@ -62,8 +63,9 @@ export default function App(): React.JSX.Element {
 
   if (authLoading) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bg }}>
         <ActivityIndicator size="large" />
+        <Text style={{ marginTop: 12, color: colors.textMuted, fontSize: 13 }}>Loading…</Text>
         <StatusBar style="auto" />
       </View>
     )
@@ -72,6 +74,11 @@ export default function App(): React.JSX.Element {
   if (!signedIn) {
     return (
       <>
+        {authError && (
+          <View style={{ paddingTop: 56, paddingHorizontal: 20, paddingBottom: 8, backgroundColor: colors.dangerBg }}>
+            <Text style={{ color: colors.danger, fontSize: 12 }}>{authError}</Text>
+          </View>
+        )}
         <SignInScreen />
         <StatusBar style="auto" />
       </>
