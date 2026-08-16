@@ -28,8 +28,16 @@ interface Props {
   onPlay: (podcastId: string, episodeId: string) => void
 }
 
-const ROW_SLOT_HEIGHT = 72
-const ROW_HEIGHT = 64
+const ROW_SLOT_HEIGHT = 84
+const ROW_HEIGHT = 76
+
+function formatRemaining(durationSec: number, positionSec: number): string {
+  if (!durationSec) return ''
+  const leftSec = Math.max(0, durationSec - positionSec)
+  if (leftSec <= 0) return 'Played'
+  const m = Math.round(leftSec / 60)
+  return m > 0 ? `${m}m left` : '<1m left'
+}
 
 export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
   const queue = useStore((s) => s.queue)
@@ -39,6 +47,8 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
   const reorderQueue = useStore((s) => s.reorderQueue)
   const currentEpisodeId = useStore((s) => s.currentEpisodeId)
   const playing = useStore((s) => s.playing)
+  const currentTimeSec = useStore((s) => s.currentTimeSec)
+  const positions = useStore((s) => s.positions)
   const loadEpisode = useStore((s) => s.loadEpisode)
   const togglePlay = useStore((s) => s.togglePlay)
   const downloadedUris = useStore((s) => s.downloadedUris)
@@ -68,9 +78,13 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
     return queue.map((id) => byEpisodeId.get(id)).filter((item): item is QueueItem => item !== undefined)
   }, [queue, podcasts, episodesByPodcast])
 
-  const handlePlayToggle = (episodeId: string): void => {
+  // Pressing play should always land you on the Player screen — pausing
+  // (the one case where playback doesn't start) is the only exception.
+  const handlePlayToggle = (podcastId: string, episodeId: string): void => {
+    const willPlay = !(currentEpisodeId === episodeId && playing)
     if (currentEpisodeId === episodeId) togglePlay()
     else loadEpisode(episodeId, { autoplay: true })
+    if (willPlay) onPlay(podcastId, episodeId)
   }
 
   const renderRow = (
@@ -81,6 +95,13 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
     const isCurrent = currentEpisodeId === item.episode.id
     const downloaded = Boolean(downloadedUris[item.episode.id])
     const downloading = Boolean(downloadingIds[item.episode.id])
+    // The currently-loaded episode's position lives in currentTimeSec
+    // (updated live, many times a second) rather than the store's
+    // positions map, which is only a periodic 5s snapshot — using it here
+    // means the bar actually moves while an episode plays instead of
+    // jumping every 5 seconds.
+    const positionSec = isCurrent ? currentTimeSec : (positions[item.episode.id] ?? 0)
+    const progress = item.episode.durationSec > 0 ? Math.min(1, positionSec / item.episode.durationSec) : 0
     return (
       <View style={[styles.row, isActive && styles.rowActive]}>
         {dragHandlers && (
@@ -98,7 +119,19 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
             <Text style={styles.epTitle} numberOfLines={1}>
               {item.episode.title}
             </Text>
-            <Text style={styles.podcastName}>{item.podcast.name}</Text>
+            <View style={styles.metaRow}>
+              <Text style={styles.podcastName} numberOfLines={1}>
+                {item.podcast.name}
+              </Text>
+              {positionSec > 0 && (
+                <Text style={styles.remaining}> · {formatRemaining(item.episode.durationSec, positionSec)}</Text>
+              )}
+            </View>
+            {positionSec > 0 && (
+              <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+              </View>
+            )}
           </View>
         </Pressable>
         <Pressable
@@ -117,7 +150,7 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
         <Pressable hitSlop={10} onPress={() => setDetailItem(item)}>
           <Info size={17} color={colors.textMuted} />
         </Pressable>
-        <Pressable hitSlop={10} onPress={() => handlePlayToggle(item.episode.id)}>
+        <Pressable hitSlop={10} onPress={() => handlePlayToggle(item.podcast.id, item.episode.id)}>
           {isCurrent && playing ? (
             <Pause size={18} color={colors.accent} fill={colors.accent} />
           ) : (
@@ -264,7 +297,17 @@ const styles = StyleSheet.create({
   rowActive: { opacity: 0.85 },
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   epTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
-  podcastName: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  podcastName: { fontSize: 11, color: colors.textMuted, flexShrink: 1 },
+  remaining: { fontSize: 11, color: colors.textMuted },
+  progressTrack: {
+    height: 3,
+    borderRadius: 1.5,
+    backgroundColor: '#e0e0e6',
+    overflow: 'hidden',
+    marginTop: 6
+  },
+  progressFill: { height: '100%', backgroundColor: colors.accent },
   empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40, paddingHorizontal: 30 },
   modalBackdrop: {
     flex: 1,

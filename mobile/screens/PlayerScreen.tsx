@@ -1,8 +1,9 @@
 import { useRef, useState } from 'react'
-import { View, Text, Pressable, PanResponder, StyleSheet, type LayoutChangeEvent } from 'react-native'
+import { View, Text, Pressable, ScrollView, PanResponder, StyleSheet, type LayoutChangeEvent } from 'react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
+import { stripHtml } from '../lib/stripHtml'
 import { colors, radii } from '../theme'
 
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2]
@@ -82,9 +83,10 @@ export default function PlayerScreen({ episode, podcast, onBack }: Props): React
 
   const progress = scrubRatio !== null ? scrubRatio : duration > 0 ? currentTimeSec / duration : 0
   const displayedTimeSec = scrubRatio !== null ? scrubRatio * duration : currentTimeSec
+  const description = stripHtml(episode.description)
 
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Pressable onPress={onBack}>
         <Text style={styles.back}>{'‹ Episodes'}</Text>
       </Pressable>
@@ -134,12 +136,20 @@ export default function PlayerScreen({ episode, podcast, onBack }: Props): React
       <Pressable style={styles.speedBtn} onPress={() => setPlaybackRate(nextSpeed(playbackRate))}>
         <Text style={styles.speedText}>{playbackRate}x</Text>
       </Pressable>
-    </View>
+
+      {description.length > 0 && (
+        <View style={styles.descriptionSection}>
+          <Text style={styles.sectionTitle}>Episode Description</Text>
+          <Text style={styles.description}>{description}</Text>
+        </View>
+      )}
+    </ScrollView>
   )
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60, paddingHorizontal: 24 },
+  container: { flex: 1, backgroundColor: colors.bg },
+  content: { paddingTop: 60, paddingHorizontal: 24, paddingBottom: 40 },
   back: { color: colors.accent, marginBottom: 16, fontSize: 15 },
   artworkWrap: { alignItems: 'center', marginBottom: 20 },
   podcastName: { fontSize: 13, color: colors.textMuted, marginBottom: 4, textAlign: 'center' },
@@ -192,5 +202,15 @@ const styles = StyleSheet.create({
     backgroundColor: '#e8e8ed',
     borderRadius: radii.pill
   },
-  speedText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary }
+  speedText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
+  descriptionSection: { marginTop: 28 },
+  sectionTitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textPlaceholder,
+    textTransform: 'uppercase',
+    letterSpacing: 0.7,
+    marginBottom: 8
+  },
+  description: { fontSize: 13, color: colors.textSecondary, lineHeight: 19 }
 })

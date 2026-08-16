@@ -655,14 +655,22 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({ positions: { ...state.positions, [episodeId]: positionSec } }))
     const userId = await currentUserId()
     if (!userId) return
-    unwrap(
-      await supabase.from('playback_positions').upsert({
-        user_id: userId,
-        episode_id: episodeId,
-        position_sec: positionSec,
-        updated_at: new Date().toISOString()
-      })
-    )
+    try {
+      unwrap(
+        await supabase.from('playback_positions').upsert({
+          user_id: userId,
+          episode_id: episodeId,
+          position_sec: positionSec,
+          updated_at: new Date().toISOString()
+        })
+      )
+    } catch (err) {
+      // Was silently swallowed before (an unhandled rejection from the
+      // AudioEngine save interval, since nothing there awaited or caught
+      // this) — a failed save here is exactly what "acts like I never
+      // listened to it" looks like, so it needs to be visible.
+      console.error(`[position] save failed for ${episodeId}:`, err)
+    }
   },
 
   setPlayed: async (episodeId, podcastId, played) => {
