@@ -1,12 +1,13 @@
 import { create } from 'zustand'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import type { Podcast, Episode, PodcastSettings } from '@shared/types'
+import type { Podcast, Episode, PodcastSettings, Station } from '@shared/types'
 import type { DiscoverPodcast } from '@shared/types'
 import { supabase } from '../lib/supabase'
 import { parseFeed } from '../lib/rss'
 import { downloadEpisode as downloadEpisodeFile, deleteDownload, listDownloadedUris } from '../lib/downloads'
+import { hashId } from '../lib/hash'
 
-export type LibraryView = 'grid' | 'list'
+export type LibraryView = 'grid' | 'list' | 'category'
 
 // Device-local UI preferences (skip durations, default library view) —
 // mirrors the desktop app's windowBounds/columnLayout: real, but not
@@ -34,11 +35,48 @@ async function saveSettings(settings: LocalSettings): Promise<void> {
   }
 }
 
+// High-water mark (newest pubDateIso seen so far) per podcast, used to
+// detect genuinely new episodes for auto-queueing. Device-local like the
+// settings above — this is only a local heuristic for "what's new since I
+// last looked," not a source of truth, so it doesn't need to sync: the
+// queue itself is synced and de-duped, so a second device with a different
+// high-water mark can never double-add an episode another device already
+// queued. Not tracked as full id sets (could grow unbounded for
+// long-running shows) — a single date per podcast is enough to know what's
+// new without an ever-growing list.
+const LAST_SEEN_STORAGE_KEY = 'empirepod.lastSeenEpisodeDate.v1'
+
+async function loadLastSeenMap(): Promise<Record<string, string>> {
+  try {
+    const raw = await AsyncStorage.getItem(LAST_SEEN_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, string>) : {}
+  } catch (err) {
+    console.error('[autoQueue] load failed:', err)
+    return {}
+  }
+}
+
+async function saveLastSeenMap(map: Record<string, string>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(LAST_SEEN_STORAGE_KEY, JSON.stringify(map))
+  } catch (err) {
+    console.error('[autoQueue] save failed:', err)
+  }
+}
+
 interface PodcastRow {
   id: string
   feed_url: string
   is_private: boolean
   custom_artwork_url: string | null
+}
+
+interface StationRow {
+  id: string
+  name: string
+  podcast_ids: string[] | null
+  sort_by: string
+  episodes_per_show: number
 }
 
 async function currentUserId(): Promise<string | null> {
@@ -107,6 +145,22 @@ interface AppState {
   downloadEpisode: (episode: Episode) => Promise<void>
   removeDownload: (episodeId: string) => void
 
+  // "Categories" in the mobile UI — backed by the same `stations` table
+  // desktop uses for its Stations feature, reusing that data model as-is
+  // (id/name/podcastIds) rather than inventing a parallel concept. A
+  // category created on mobile shows up as a Station on desktop and vice
+  // versa. sortBy/episodesPerShow (desktop-only station-as-playlist
+  // settings) are left at their defaults here since mobile only uses these
+  // for grouping the Library, not for aggregate playback.
+  stations: Station[]
+  stationsLoaded: boolean
+  loadStations: () => Promise<void>
+  createCategory: (name: string) => Promise<Station>
+  renameCategory: (stationId: string, name: string) => Promise<void>
+  deleteCategory: (stationId: string) => Promise<void>
+  addPodcastToCategory: (stationId: string, podcastId: string) => Promise<void>
+  removePodcastFromCategory: (stationId: string, podcastId: string) => Promise<void>
+
   // Live playback state, read/written by AudioEngine (components/AudioEngine.tsx,
   // mounted once at the app root) and by any screen that wants to control or
   // display playback — mirrors the desktop app's useAudioEngine.ts pattern of
@@ -142,6 +196,25 @@ async function saveQueue(episodeIds: string[]): Promise<void> {
     console.error('[queue] save failed:', err)
     throw err
   }
+}
+
+// Always writes the station's full known row rather than a partial patch —
+// simplest way to guarantee sort_by/episodes_per_show (desktop-only station
+// settings mobile never edits) survive a mobile-initiated rename or
+// membership change unchanged.
+async function upsertStation(userId: string, station: Station): Promise<void> {
+  unwrap(
+    await supabase.from('stations').upsert({
+      user_id: userId,
+      id: station.id,
+      name: station.name,
+      podcast_ids: station.podcastIds,
+      sort_by: station.sortBy,
+      episodes_per_show: station.episodesPerShow,
+      updated_at: new Date().toISOString(),
+      deleted_at: null
+    })
+  )
 }
 
 const PAGE_SIZE = 1000
@@ -228,6 +301,9 @@ export const useStore = create<AppState>((set, get) => ({
 
   downloadedUris: {},
   downloadingIds: {},
+
+  stations: [],
+  stationsLoaded: false,
 
   skipBackSec: DEFAULT_SETTINGS.skipBackSec,
   skipForwardSec: DEFAULT_SETTINGS.skipForwardSec,
@@ -326,7 +402,9 @@ export const useStore = create<AppState>((set, get) => ({
       positions: {},
       podcastSettings: {},
       queue: [],
-      libraryLoaded: false
+      libraryLoaded: false,
+      stations: [],
+      stationsLoaded: false
     })
   },
 
@@ -419,6 +497,15 @@ export const useStore = create<AppState>((set, get) => ({
         }))
       }
 
+      // A podcast with no entry yet in `lastSeen` is being loaded on this
+      // device for the first time (a fresh subscribe, or the first library
+      // load ever on a new device) — its whole current episode list is the
+      // pre-existing backlog, not "new," so it's only used to seed the
+      // high-water mark, never auto-queued. Only episodes newer than an
+      // already-established mark count as new.
+      const lastSeen = await loadLastSeenMap()
+      const newEpisodes: Episode[] = []
+
       await mapWithConcurrency(
         publicRows,
         FEED_FETCH_CONCURRENCY,
@@ -441,6 +528,16 @@ export const useStore = create<AppState>((set, get) => ({
               unread: episodes.filter((e) => !e.played).length,
               isPrivate: false
             }
+
+            const priorMark = lastSeen[row.id]
+            if (priorMark) {
+              for (const e of episodes) {
+                if (!e.played && e.pubDateIso > priorMark) newEpisodes.push(e)
+              }
+            }
+            const newestPubDate = episodes.reduce((max, e) => (e.pubDateIso > max ? e.pubDateIso : max), '')
+            if (newestPubDate) lastSeen[row.id] = newestPubDate
+
             return { podcast, episodes }
           } catch (err) {
             console.error(`Failed to load feed ${row.feed_url}:`, err)
@@ -449,6 +546,22 @@ export const useStore = create<AppState>((set, get) => ({
         },
         mergeFeed
       )
+
+      await saveLastSeenMap(lastSeen)
+      if (newEpisodes.length > 0) {
+        const existingQueue = get().queue
+        const existingSet = new Set(existingQueue)
+        const toAdd = newEpisodes
+          .filter((e) => !existingSet.has(e.id))
+          .sort((a, b) => (a.pubDateIso < b.pubDateIso ? -1 : 1))
+          .map((e) => e.id)
+        if (toAdd.length > 0) {
+          const nextQueue = [...existingQueue, ...toAdd]
+          set({ queue: nextQueue })
+          await saveQueue(nextQueue)
+          console.log(`[loadLibrary] auto-queued ${toAdd.length} new episode(s)`)
+        }
+      }
 
       // Final sweep to drop any podcast that's no longer subscribed (e.g.
       // unsubscribed from another device since the last load) — mergeFeed
@@ -484,9 +597,9 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   // Mirrors the desktop app's unsubscribe cascade (src/main/subscriptions.ts
-  // applyUnsubscribeCascade) as far as it applies here: drop the podcast
-  // locally, tombstone it remotely, and strip its episodes out of the
-  // queue. Stations aren't a mobile concept yet, so no station cleanup.
+  // applyUnsubscribeCascade): drop the podcast locally, tombstone it
+  // remotely, strip its episodes out of the queue, and strip its id out of
+  // any category (Station) it belonged to.
   unsubscribe: async (podcastId) => {
     const userId = await currentUserId()
     if (!userId) return
@@ -494,6 +607,9 @@ export const useStore = create<AppState>((set, get) => ({
     const previousQueue = get().queue
     const nextQueue = previousQueue.filter((id) => !removedEpisodeIds.has(id))
     const queueChanged = nextQueue.length !== previousQueue.length
+    const affectedStationIds = get()
+      .stations.filter((s) => s.podcastIds.includes(podcastId))
+      .map((s) => s.id)
     set((state) => ({
       podcasts: state.podcasts.filter((p) => p.id !== podcastId),
       episodesByPodcast: Object.fromEntries(
@@ -513,6 +629,10 @@ export const useStore = create<AppState>((set, get) => ({
       console.error(`[unsubscribe] tombstone failed for ${podcastId}:`, err)
     }
     if (queueChanged) await saveQueue(nextQueue)
+    // Mirrors the desktop app's unsubscribe cascade: an unsubscribed show
+    // shouldn't linger as a dangling id in a category (Station) that can
+    // never resolve to anything.
+    await Promise.all(affectedStationIds.map((id) => get().removePodcastFromCategory(id, podcastId)))
   },
 
   setNotify: async (podcastId, notify) => {
@@ -657,6 +777,81 @@ export const useStore = create<AppState>((set, get) => ({
       const { [episodeId]: _removed, ...rest } = state.downloadedUris
       return { downloadedUris: rest }
     })
+  },
+
+  loadStations: async () => {
+    const userId = await currentUserId()
+    if (!userId) return
+    try {
+      const rows = await fetchAllRows<StationRow>((from, to) =>
+        supabase
+          .from('stations')
+          .select('*', { count: 'exact' })
+          .eq('user_id', userId)
+          .is('deleted_at', null)
+          .range(from, to)
+      )
+      const validSorts = new Set(['newest', 'oldest', 'shortest', 'longest'])
+      const stations: Station[] = rows.map((row) => ({
+        id: row.id,
+        name: row.name,
+        podcastIds: Array.isArray(row.podcast_ids) ? row.podcast_ids : [],
+        sortBy: validSorts.has(row.sort_by) ? (row.sort_by as Station['sortBy']) : 'newest',
+        episodesPerShow: typeof row.episodes_per_show === 'number' ? row.episodes_per_show : 5
+      }))
+      set({ stations, stationsLoaded: true })
+    } catch (err) {
+      console.error('[stations] load failed:', err)
+      set({ stationsLoaded: true })
+    }
+  },
+
+  createCategory: async (name) => {
+    const userId = await currentUserId()
+    if (!userId) throw new Error('Not signed in')
+    const id = await hashId(`${name}-${Date.now()}-${Math.random()}`)
+    const station: Station = { id, name, podcastIds: [], sortBy: 'newest', episodesPerShow: 5 }
+    await upsertStation(userId, station)
+    set((state) => ({ stations: [...state.stations, station] }))
+    return station
+  },
+
+  renameCategory: async (stationId, name) => {
+    const userId = await currentUserId()
+    if (!userId) return
+    const station = get().stations.find((s) => s.id === stationId)
+    if (!station) return
+    const updated: Station = { ...station, name }
+    set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
+    await upsertStation(userId, updated)
+  },
+
+  deleteCategory: async (stationId) => {
+    const userId = await currentUserId()
+    if (!userId) return
+    set((state) => ({ stations: state.stations.filter((s) => s.id !== stationId) }))
+    const now = new Date().toISOString()
+    unwrap(await supabase.from('stations').upsert({ user_id: userId, id: stationId, deleted_at: now, updated_at: now }))
+  },
+
+  addPodcastToCategory: async (stationId, podcastId) => {
+    const userId = await currentUserId()
+    if (!userId) return
+    const station = get().stations.find((s) => s.id === stationId)
+    if (!station || station.podcastIds.includes(podcastId)) return
+    const updated: Station = { ...station, podcastIds: [...station.podcastIds, podcastId] }
+    set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
+    await upsertStation(userId, updated)
+  },
+
+  removePodcastFromCategory: async (stationId, podcastId) => {
+    const userId = await currentUserId()
+    if (!userId) return
+    const station = get().stations.find((s) => s.id === stationId)
+    if (!station) return
+    const updated: Station = { ...station, podcastIds: station.podcastIds.filter((id) => id !== podcastId) }
+    set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
+    await upsertStation(userId, updated)
   },
 
   loadEpisode: (episodeId, opts) => {

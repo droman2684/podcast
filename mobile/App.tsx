@@ -3,7 +3,6 @@ import { View, Text, ActivityIndicator } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { useStore } from './state/store'
 import SignInScreen from './screens/SignInScreen'
-import HomeScreen from './screens/HomeScreen'
 import LibraryScreen from './screens/LibraryScreen'
 import EpisodeListScreen from './screens/EpisodeListScreen'
 import PlayerScreen from './screens/PlayerScreen'
@@ -12,6 +11,8 @@ import SearchScreen from './screens/SearchScreen'
 import DiscoverScreen from './screens/DiscoverScreen'
 import QueueScreen from './screens/QueueScreen'
 import SettingsScreen from './screens/SettingsScreen'
+import CategoriesScreen from './screens/CategoriesScreen'
+import CategoryDetailScreen from './screens/CategoryDetailScreen'
 import TabBar, { type Tab } from './components/TabBar'
 import Sidebar from './components/Sidebar'
 import AudioEngine from './components/AudioEngine'
@@ -24,6 +25,8 @@ type Route =
   | { name: 'player'; podcastId: string; episodeId: string }
   | { name: 'podcastSettings'; podcastId: string }
   | { name: 'settings' }
+  | { name: 'categories' }
+  | { name: 'categoryDetail'; stationId: string }
 
 export default function App(): React.JSX.Element {
   const authLoading = useStore((s) => s.authLoading)
@@ -36,6 +39,9 @@ export default function App(): React.JSX.Element {
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const libraryLoaded = useStore((s) => s.libraryLoaded)
   const loadLibrary = useStore((s) => s.loadLibrary)
+  const stations = useStore((s) => s.stations)
+  const stationsLoaded = useStore((s) => s.stationsLoaded)
+  const loadStations = useStore((s) => s.loadStations)
   const currentEpisodeId = useStore((s) => s.currentEpisodeId)
   const loadEpisode = useStore((s) => s.loadEpisode)
 
@@ -60,6 +66,10 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (signedIn && !libraryLoaded) loadLibrary()
   }, [signedIn, libraryLoaded, loadLibrary])
+
+  useEffect(() => {
+    if (signedIn && !stationsLoaded) loadStations()
+  }, [signedIn, stationsLoaded, loadStations])
 
   if (authLoading) {
     return (
@@ -89,6 +99,8 @@ export default function App(): React.JSX.Element {
   const goToEpisodes = (podcastId: string): void => setRoute({ name: 'episodes', podcastId })
   const openSettings = (podcastId: string): void => setRoute({ name: 'podcastSettings', podcastId })
   const goToAppSettings = (): void => setRoute({ name: 'settings' })
+  const goToCategories = (): void => setRoute({ name: 'categories' })
+  const goToCategoryDetail = (stationId: string): void => setRoute({ name: 'categoryDetail', stationId })
 
   // Opens the Player screen for an episode. Only (re)loads it into the
   // global engine if it isn't already the current one — re-opening the
@@ -103,10 +115,15 @@ export default function App(): React.JSX.Element {
 
   if (route.name === 'tabs') {
     showTabBar = true
-    if (tab === 'home') {
-      screen = <HomeScreen onOpenPlayer={openPlayer} onOpenSettings={goToAppSettings} />
-    } else if (tab === 'library') {
-      screen = <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
+    if (tab === 'library') {
+      screen = (
+        <LibraryScreen
+          onSelectPodcast={goToEpisodes}
+          onOpenSettings={openSettings}
+          onOpenAppSettings={goToAppSettings}
+          onManageCategories={goToCategories}
+        />
+      )
     } else if (tab === 'search') {
       screen = <SearchScreen />
     } else if (tab === 'discover') {
@@ -124,17 +141,36 @@ export default function App(): React.JSX.Element {
         onOpenSettings={openSettings}
       />
     ) : (
-      <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
+      <LibraryScreen
+        onSelectPodcast={goToEpisodes}
+        onOpenSettings={openSettings}
+        onOpenAppSettings={goToAppSettings}
+        onManageCategories={goToCategories}
+      />
     )
   } else if (route.name === 'podcastSettings') {
     const podcast = podcasts.find((p) => p.id === route.podcastId)
     screen = podcast ? (
       <PodcastSettingsScreen podcast={podcast} onBack={goToTabs} onUnsubscribed={goToTabs} />
     ) : (
-      <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
+      <LibraryScreen
+        onSelectPodcast={goToEpisodes}
+        onOpenSettings={openSettings}
+        onOpenAppSettings={goToAppSettings}
+        onManageCategories={goToCategories}
+      />
     )
   } else if (route.name === 'settings') {
     screen = <SettingsScreen onBack={goToTabs} />
+  } else if (route.name === 'categories') {
+    screen = <CategoriesScreen onBack={goToTabs} onOpenCategory={goToCategoryDetail} />
+  } else if (route.name === 'categoryDetail') {
+    const station = stations.find((s) => s.id === route.stationId)
+    screen = station ? (
+      <CategoryDetailScreen station={station} onBack={goToCategories} onDeleted={goToCategories} />
+    ) : (
+      <CategoriesScreen onBack={goToTabs} onOpenCategory={goToCategoryDetail} />
+    )
   } else {
     const podcast = podcasts.find((p) => p.id === route.podcastId)
     const episode = episodesByPodcast[route.podcastId]?.find((e) => e.id === route.episodeId)
@@ -142,7 +178,12 @@ export default function App(): React.JSX.Element {
       podcast && episode ? (
         <PlayerScreen episode={episode} podcast={podcast} onBack={() => goToEpisodes(podcast.id)} />
       ) : (
-        <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
+        <LibraryScreen
+        onSelectPodcast={goToEpisodes}
+        onOpenSettings={openSettings}
+        onOpenAppSettings={goToAppSettings}
+        onManageCategories={goToCategories}
+      />
       )
   }
 

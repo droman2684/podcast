@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
-import { Home, Library, Search, Sparkles, ListOrdered } from 'lucide-react-native'
+import { Library, Search, Sparkles, ListOrdered } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from './Artwork'
@@ -11,12 +11,11 @@ import type { Tab } from './TabBar'
 export const SIDEBAR_WIDTH = 260
 export const RAIL_WIDTH = 88
 
-// Same five destinations, same order, same icons as TabBar.tsx — rotating an
+// Same destinations, same order, same icons as TabBar.tsx — rotating an
 // iPad shouldn't rearrange the app.
-const ITEMS: { key: Tab; label: string; Icon: typeof Home }[] = [
-  { key: 'home', label: 'Home', Icon: Home },
-  { key: 'library', label: 'Library', Icon: Library },
+const ITEMS: { key: Tab; label: string; Icon: typeof Library }[] = [
   { key: 'queue', label: 'Queue', Icon: ListOrdered },
+  { key: 'library', label: 'Library', Icon: Library },
   { key: 'search', label: 'Search', Icon: Search },
   { key: 'discover', label: 'Discover', Icon: Sparkles }
 ]
@@ -61,7 +60,7 @@ export default function Sidebar({
 
   // Episodes with a saved position that aren't finished. The store has no
   // "last played at" timestamp, so this is ordered by publish date — newest
-  // first — which is the same ordering HomeScreen uses for New Episodes.
+  // first.
   const inProgress = useMemo(() => {
     const out: { episode: Episode; podcast: Podcast }[] = []
     for (const podcast of podcasts) {

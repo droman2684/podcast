@@ -1,32 +1,60 @@
-import { useState } from 'react'
-import { View, Text, FlatList, Pressable, StyleSheet, ActivityIndicator } from 'react-native'
-import { Grid2x2, List, ChevronRight } from 'lucide-react-native'
+import { useMemo, useState } from 'react'
+import { View, Text, FlatList, ScrollView, Pressable, StyleSheet, ActivityIndicator } from 'react-native'
+import { Grid2x2, List, Tags, ChevronRight, Settings } from 'lucide-react-native'
 import type { Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import SwipeToDelete from '../components/SwipeToDelete'
 import { colors, radii, cardShadow } from '../theme'
 
-type ViewMode = 'grid' | 'list'
+type ViewMode = 'grid' | 'list' | 'category'
 const GRID_COLUMNS = 3
+const UNCATEGORIZED_ID = '__uncategorized'
 
 interface Props {
   onSelectPodcast: (id: string) => void
   onOpenSettings: (id: string) => void
+  onOpenAppSettings: () => void
+  onManageCategories: () => void
 }
 
-export default function LibraryScreen({ onSelectPodcast, onOpenSettings }: Props): React.JSX.Element {
+export default function LibraryScreen({
+  onSelectPodcast,
+  onOpenSettings,
+  onOpenAppSettings,
+  onManageCategories
+}: Props): React.JSX.Element {
   const podcasts = useStore((s) => s.podcasts)
   const loading = useStore((s) => s.libraryLoading)
   const error = useStore((s) => s.libraryError)
   const loadLibrary = useStore((s) => s.loadLibrary)
   const unsubscribe = useStore((s) => s.unsubscribe)
   const defaultLibraryView = useStore((s) => s.defaultLibraryView)
+  const stations = useStore((s) => s.stations)
 
   // Seeded from the user's Settings preference. This screen remounts on
   // every tab visit (see comment below), so re-reading the store default
   // here each time is intentional, not a bug.
   const [view, setView] = useState<ViewMode>(defaultLibraryView)
+
+  // A podcast can belong to more than one category (mirrors desktop's
+  // Stations, which this reuses — see the store's stations comment), so it
+  // can legitimately appear under more than one header here. Anything in
+  // zero categories falls into a trailing "Uncategorized" group.
+  const categoryGroups = useMemo(() => {
+    const byId = new Map(podcasts.map((p) => [p.id, p]))
+    const groups = stations.map((station) => ({
+      id: station.id,
+      name: station.name,
+      podcasts: station.podcastIds.map((id) => byId.get(id)).filter((p): p is Podcast => p !== undefined)
+    }))
+    const categorized = new Set(stations.flatMap((s) => s.podcastIds))
+    const uncategorized = podcasts.filter((p) => !categorized.has(p.id))
+    if (uncategorized.length > 0) {
+      groups.push({ id: UNCATEGORIZED_ID, name: 'Uncategorized', podcasts: uncategorized })
+    }
+    return groups
+  }, [stations, podcasts])
 
   // The initial load is triggered once at the app root (see App.tsx) rather
   // than here — this screen unmounts and remounts every time the tab bar
@@ -81,6 +109,11 @@ export default function LibraryScreen({ onSelectPodcast, onOpenSettings }: Props
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Library</Text>
+        <Pressable hitSlop={10} onPress={onOpenAppSettings}>
+          <Settings size={20} color={colors.textMuted} />
+        </Pressable>
+      </View>
+      <View style={styles.toolbar}>
         <View style={styles.toggle}>
           <Pressable
             style={[styles.toggleBtn, view === 'grid' && styles.toggleBtnActive]}
@@ -94,7 +127,16 @@ export default function LibraryScreen({ onSelectPodcast, onOpenSettings }: Props
           >
             <List size={14} color={view === 'list' ? colors.accent : colors.textPlaceholder} />
           </Pressable>
+          <Pressable
+            style={[styles.toggleBtn, view === 'category' && styles.toggleBtnActive]}
+            onPress={() => setView('category')}
+          >
+            <Tags size={14} color={view === 'category' ? colors.accent : colors.textPlaceholder} />
+          </Pressable>
         </View>
+        <Pressable onPress={onManageCategories}>
+          <Text style={styles.manageLink}>Manage categories</Text>
+        </Pressable>
       </View>
       {error && <Text style={styles.error}>{error}</Text>}
       {view === 'grid' ? (
@@ -110,7 +152,7 @@ export default function LibraryScreen({ onSelectPodcast, onOpenSettings }: Props
           renderItem={renderGridItem}
           ListEmptyComponent={<EmptyState loading={loading} />}
         />
-      ) : (
+      ) : view === 'list' ? (
         <FlatList
           data={podcasts}
           key="list"
@@ -121,6 +163,23 @@ export default function LibraryScreen({ onSelectPodcast, onOpenSettings }: Props
           renderItem={renderListItem}
           ListEmptyComponent={<EmptyState loading={loading} />}
         />
+      ) : (
+        <ScrollView contentContainerStyle={styles.listContent}>
+          {categoryGroups.length === 0 ? (
+            <EmptyState loading={loading} />
+          ) : (
+            categoryGroups.map((group) => (
+              <View key={group.id} style={styles.group}>
+                <Text style={styles.groupHeader}>{group.name}</Text>
+                {group.podcasts.map((item) => (
+                  <View key={item.id} style={{ marginBottom: 8 }}>
+                    {renderListItem({ item })}
+                  </View>
+                ))}
+              </View>
+            ))
+          )}
+        </ScrollView>
       )}
     </View>
   )
@@ -148,9 +207,17 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: SCREEN_PADDING,
-    marginBottom: 16
+    marginBottom: 12
   },
   title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary },
+  toolbar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: SCREEN_PADDING,
+    marginBottom: 16
+  },
+  manageLink: { fontSize: 12.5, fontWeight: '600', color: colors.accent },
   toggle: {
     flexDirection: 'row',
     backgroundColor: '#e8e8ed',
@@ -192,6 +259,16 @@ const styles = StyleSheet.create({
   listName: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
   listAuthor: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   listBadge: { backgroundColor: colors.accent, borderRadius: radii.badge, paddingHorizontal: 7, paddingVertical: 2 },
+
+  group: { marginBottom: 18 },
+  groupHeader: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 8
+  },
 
   empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40, paddingHorizontal: 30 }
 })
