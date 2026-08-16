@@ -42,7 +42,7 @@
       [
         "expo-audio",
         {
-          "enableBackgroundPlayback": true
+          "enableBackgroundRecording": true
         }
       ],
       "expo-asset"

@@ -39,7 +39,7 @@ export default function App(): React.JSX.Element {
   const currentEpisodeId = useStore((s) => s.currentEpisodeId)
   const loadEpisode = useStore((s) => s.loadEpisode)
 
-  const [tab, setTab] = useState<Tab>('home')
+  const [tab, setTab] = useState<Tab>('queue')
   const [route, setRoute] = useState<Route>({ name: 'tabs' })
 
   // Drives the whole iPad adaptation. Called unconditionally, above the
