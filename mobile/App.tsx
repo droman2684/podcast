@@ -13,7 +13,10 @@ import DiscoverScreen from './screens/DiscoverScreen'
 import QueueScreen from './screens/QueueScreen'
 import SettingsScreen from './screens/SettingsScreen'
 import TabBar, { type Tab } from './components/TabBar'
+import Sidebar from './components/Sidebar'
 import AudioEngine from './components/AudioEngine'
+import { useLayout } from './lib/useLayout'
+import { colors } from './theme'
 
 type Route =
   | { name: 'tabs' }
@@ -37,6 +40,10 @@ export default function App(): React.JSX.Element {
 
   const [tab, setTab] = useState<Tab>('home')
   const [route, setRoute] = useState<Route>({ name: 'tabs' })
+
+  // Drives the whole iPad adaptation. Called unconditionally, above the
+  // authLoading/signedIn early returns, so hook order stays stable.
+  const { mode, isTablet } = useLayout()
 
   useEffect(() => {
     initAuth()
@@ -130,6 +137,33 @@ export default function App(): React.JSX.Element {
       ) : (
         <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
       )
+  }
+
+  // At tablet widths the sidebar is persistent, so picking a destination has to
+  // also unwind any drill-in the content area is currently showing — otherwise
+  // tapping "Library" while on the Player screen would appear to do nothing.
+  const selectTab = (next: Tab): void => {
+    setTab(next)
+    setRoute({ name: 'tabs' })
+  }
+
+  if (isTablet) {
+    return (
+      <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.bg }}>
+        <AudioEngine />
+        <Sidebar
+          mode={mode}
+          active={tab}
+          onSelect={selectTab}
+          onOpenSettings={goToAppSettings}
+          onOpenPlayer={openPlayer}
+        />
+        {/* Drill-in still pushes within this column for now; the list/detail
+            split lands with SplitView (spec §3). */}
+        <View style={{ flex: 1 }}>{screen}</View>
+        <StatusBar style="auto" />
+      </View>
+    )
   }
 
   return (
