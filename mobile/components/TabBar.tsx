@@ -7,9 +7,9 @@ export type Tab = 'home' | 'library' | 'search' | 'discover' | 'queue'
 const TABS: { key: Tab; label: string; Icon: typeof Home }[] = [
   { key: 'home', label: 'Home', Icon: Home },
   { key: 'library', label: 'Library', Icon: Library },
+  { key: 'queue', label: 'Queue', Icon: ListOrdered },
   { key: 'search', label: 'Search', Icon: Search },
-  { key: 'discover', label: 'Discover', Icon: Sparkles },
-  { key: 'queue', label: 'Queue', Icon: ListOrdered }
+  { key: 'discover', label: 'Discover', Icon: Sparkles }
 ]
 
 interface Props {

@@ -35,6 +35,16 @@ export default function DraggableList<T>({
   const [activeKey, setActiveKey] = useState<string | null>(null)
   const dragY = useRef(new Animated.Value(0)).current
   const orderRef = useRef(data)
+  // One PanResponder per row key, created once and reused across renders —
+  // recreating all of them on every render (as happened before) is real,
+  // avoidable overhead multiplied by row count on every state change.
+  const respondersRef = useRef(new Map<string, PanResponderInstance>())
+  // Responders are created once per key and reused, but keyExtractor/
+  // itemHeight/onReorder are read through this ref (kept current every
+  // render) so a cached responder never runs against stale versions of
+  // those if the caller passes new function references each render.
+  const latestRef = useRef({ keyExtractor, itemHeight, onReorder })
+  latestRef.current = { keyExtractor, itemHeight, onReorder }
 
   useEffect(() => {
     if (activeKey === null) {
@@ -43,7 +53,22 @@ export default function DraggableList<T>({
     }
   }, [data, activeKey])
 
-  const makeResponder = (key: string): PanResponderInstance =>
+  useEffect(() => {
+    const liveKeys = new Set(data.map(keyExtractor))
+    for (const key of respondersRef.current.keys()) {
+      if (!liveKeys.has(key)) respondersRef.current.delete(key)
+    }
+  }, [data, keyExtractor])
+
+  const getResponder = (key: string): PanResponderInstance => {
+    const existing = respondersRef.current.get(key)
+    if (existing) return existing
+    const responder = createResponder(key)
+    respondersRef.current.set(key, responder)
+    return responder
+  }
+
+  const createResponder = (key: string): PanResponderInstance =>
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onPanResponderGrant: () => {
@@ -52,10 +77,11 @@ export default function DraggableList<T>({
       },
       onPanResponderMove: (_evt, gesture) => {
         dragY.setValue(gesture.dy)
-        const currentIndex = orderRef.current.findIndex((item) => keyExtractor(item) === key)
+        const { keyExtractor: getKey, itemHeight: height } = latestRef.current
+        const currentIndex = orderRef.current.findIndex((item) => getKey(item) === key)
         if (currentIndex === -1) return
         const targetIndex = clamp(
-          Math.round((currentIndex * itemHeight + gesture.dy) / itemHeight),
+          Math.round((currentIndex * height + gesture.dy) / height),
           0,
           orderRef.current.length - 1
         )
@@ -70,7 +96,7 @@ export default function DraggableList<T>({
       onPanResponderRelease: () => {
         setActiveKey(null)
         dragY.setValue(0)
-        onReorder(orderRef.current)
+        latestRef.current.onReorder(orderRef.current)
       },
       onPanResponderTerminate: () => {
         setActiveKey(null)
@@ -83,7 +109,7 @@ export default function DraggableList<T>({
       {order.map((item, index) => {
         const key = keyExtractor(item)
         const isActive = key === activeKey
-        const responder = makeResponder(key)
+        const responder = getResponder(key)
         return (
           <Animated.View
             key={key}

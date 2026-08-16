@@ -1,12 +1,12 @@
-import { useState } from 'react'
-import { View, Text, Pressable, StyleSheet, type LayoutChangeEvent } from 'react-native'
+import { useRef, useState } from 'react'
+import { View, Text, Pressable, PanResponder, StyleSheet, type LayoutChangeEvent } from 'react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import { colors, radii } from '../theme'
 
-const SKIP_SEC = 15
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2]
+const THUMB_SIZE = 16
 
 function nextSpeed(current: number): number {
   const idx = SPEEDS.indexOf(current)
@@ -34,18 +34,54 @@ export default function PlayerScreen({ episode, podcast, onBack }: Props): React
   const currentTimeSec = useStore((s) => s.currentTimeSec)
   const duration = useStore((s) => s.duration)
   const playbackRate = useStore((s) => s.playbackRate)
+  const skipBackSec = useStore((s) => s.skipBackSec)
+  const skipForwardSec = useStore((s) => s.skipForwardSec)
   const togglePlay = useStore((s) => s.togglePlay)
   const requestSeek = useStore((s) => s.requestSeek)
   const setPlaybackRate = useStore((s) => s.setPlaybackRate)
   const [barWidth, setBarWidth] = useState(0)
+  // null when not actively dragging the seek thumb; a 0-1 ratio while dragging,
+  // so the bar tracks the finger instead of the (stale, until seek completes)
+  // playback position.
+  const [scrubRatio, setScrubRatio] = useState<number | null>(null)
 
-  const seekByBarTap = (x: number): void => {
-    if (barWidth <= 0 || duration <= 0) return
-    const ratio = Math.min(1, Math.max(0, x / barWidth))
-    requestSeek(ratio * duration)
-  }
+  // PanResponder is created once via useRef — its callbacks close over whatever
+  // barWidth/duration were at creation time, so live values are read through
+  // refs instead (same pattern as DraggableList.tsx's latestRef).
+  const barWidthRef = useRef(barWidth)
+  barWidthRef.current = barWidth
+  const durationRef = useRef(duration)
+  durationRef.current = duration
+  const dragStartXRef = useRef(0)
 
-  const progress = duration > 0 ? currentTimeSec / duration : 0
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (evt) => {
+        dragStartXRef.current = evt.nativeEvent.locationX
+        const width = barWidthRef.current
+        const ratio = width > 0 ? Math.min(1, Math.max(0, evt.nativeEvent.locationX / width)) : 0
+        setScrubRatio(ratio)
+      },
+      onPanResponderMove: (_evt, gesture) => {
+        const width = barWidthRef.current
+        if (width <= 0) return
+        const x = dragStartXRef.current + gesture.dx
+        setScrubRatio(Math.min(1, Math.max(0, x / width)))
+      },
+      onPanResponderRelease: () => {
+        setScrubRatio((ratio) => {
+          if (ratio !== null && durationRef.current > 0) requestSeek(ratio * durationRef.current)
+          return null
+        })
+      },
+      onPanResponderTerminate: () => setScrubRatio(null)
+    })
+  ).current
+
+  const progress = scrubRatio !== null ? scrubRatio : duration > 0 ? currentTimeSec / duration : 0
+  const displayedTimeSec = scrubRatio !== null ? scrubRatio * duration : currentTimeSec
 
   return (
     <View style={styles.container}>
@@ -62,27 +98,36 @@ export default function PlayerScreen({ episode, podcast, onBack }: Props): React
         {episode.title}
       </Text>
 
-      <Pressable
-        style={styles.bar}
+      <View
+        style={styles.barTouchArea}
         onLayout={(e: LayoutChangeEvent) => setBarWidth(e.nativeEvent.layout.width)}
-        onPress={(e) => seekByBarTap(e.nativeEvent.locationX)}
+        {...panResponder.panHandlers}
       >
-        <View style={[styles.barFill, { width: `${progress * 100}%` }]} />
-      </Pressable>
+        <View style={styles.bar}>
+          <View style={[styles.barFill, { width: `${progress * 100}%` }]} />
+        </View>
+        <View
+          style={[
+            styles.thumb,
+            { left: `${progress * 100}%` },
+            scrubRatio !== null && styles.thumbActive
+          ]}
+        />
+      </View>
       <View style={styles.timeRow}>
-        <Text style={styles.timeText}>{formatTime(currentTimeSec)}</Text>
+        <Text style={styles.timeText}>{formatTime(displayedTimeSec)}</Text>
         <Text style={styles.timeText}>{formatTime(duration)}</Text>
       </View>
 
       <View style={styles.controls}>
-        <Pressable onPress={() => requestSeek(Math.max(0, currentTimeSec - SKIP_SEC))}>
-          <Text style={styles.skipBtn}>-15s</Text>
+        <Pressable onPress={() => requestSeek(Math.max(0, currentTimeSec - skipBackSec))}>
+          <Text style={styles.skipBtn}>-{skipBackSec}s</Text>
         </Pressable>
         <Pressable style={styles.playButton} onPress={togglePlay}>
           <Text style={styles.playButtonText}>{playing ? 'Pause' : 'Play'}</Text>
         </Pressable>
-        <Pressable onPress={() => requestSeek(Math.min(duration, currentTimeSec + SKIP_SEC))}>
-          <Text style={styles.skipBtn}>+15s</Text>
+        <Pressable onPress={() => requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))}>
+          <Text style={styles.skipBtn}>+{skipForwardSec}s</Text>
         </Pressable>
       </View>
 
@@ -99,14 +144,29 @@ const styles = StyleSheet.create({
   artworkWrap: { alignItems: 'center', marginBottom: 20 },
   podcastName: { fontSize: 13, color: colors.textMuted, marginBottom: 4, textAlign: 'center' },
   title: { fontSize: 18, fontWeight: '700', marginBottom: 20, textAlign: 'center', color: colors.textPrimary },
+  barTouchArea: {
+    justifyContent: 'center',
+    paddingVertical: 12,
+    marginBottom: 6
+  },
   bar: {
     height: 6,
     borderRadius: 3,
     backgroundColor: '#e0e0e6',
-    overflow: 'hidden',
-    marginBottom: 6
+    overflow: 'hidden'
   },
   barFill: { height: '100%', backgroundColor: colors.accent },
+  thumb: {
+    position: 'absolute',
+    width: THUMB_SIZE,
+    height: THUMB_SIZE,
+    borderRadius: THUMB_SIZE / 2,
+    backgroundColor: colors.accent,
+    marginLeft: -THUMB_SIZE / 2,
+    borderWidth: 2,
+    borderColor: '#fff'
+  },
+  thumbActive: { transform: [{ scale: 1.3 }] },
   timeRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 24 },
   timeText: { fontSize: 12, color: colors.textMuted },
   controls: {

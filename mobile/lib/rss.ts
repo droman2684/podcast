@@ -43,8 +43,19 @@ export interface ParsedFeed {
   episodes: Episode[]
 }
 
+const FEED_FETCH_TIMEOUT_MS = 15000
+
 export async function parseFeed(feedUrl: string, podcastId: string): Promise<ParsedFeed> {
-  const res = await fetch(feedUrl)
+  // Bare fetch() has no timeout — one slow or hung podcast host used to be
+  // able to stall the whole batch it was fetched alongside indefinitely.
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), FEED_FETCH_TIMEOUT_MS)
+  let res: Response
+  try {
+    res = await fetch(feedUrl, { signal: controller.signal })
+  } finally {
+    clearTimeout(timeout)
+  }
   if (!res.ok) throw new Error(`Failed to fetch feed (HTTP ${res.status})`)
   const xml = await res.text()
   const data = parser.parse(xml)
@@ -58,25 +69,33 @@ export async function parseFeed(feedUrl: string, podcastId: string): Promise<Par
       ? [rawItems]
       : []
 
-  const episodes: Episode[] = []
-  for (const item of items) {
-    const enclosureUrl = attr(item.enclosure, 'url') ?? ''
-    const guid = text(item.guid) || text(item.link) || enclosureUrl || text(item.title)
-    if (!guid || !enclosureUrl) continue
-    const id = await hashId(guid)
-    episodes.push({
-      id,
-      podcastId,
-      title: text(item.title),
-      description: text(item.description) || text(item['itunes:summary']),
-      audioUrl: enclosureUrl,
-      artworkUrl: attr(item['itunes:image'], 'href'),
-      durationSec: parseItunesDuration(item['itunes:duration']),
-      pubDateIso: item.pubDate ? new Date(text(item.pubDate)).toISOString() : new Date(0).toISOString(),
-      played: false,
-      chaptersUrl: null
-    })
-  }
+  // hashId() is a native crypto bridge call — awaiting it one item at a time
+  // meant a show with hundreds of episodes made hundreds of sequential
+  // round-trips to parse a single feed. Running them concurrently instead
+  // was the single biggest win for how long the library took to load.
+  const episodes = (
+    await Promise.all(
+      items.map(async (item) => {
+        const enclosureUrl = attr(item.enclosure, 'url') ?? ''
+        const guid = text(item.guid) || text(item.link) || enclosureUrl || text(item.title)
+        if (!guid || !enclosureUrl) return null
+        const id = await hashId(guid)
+        const episode: Episode = {
+          id,
+          podcastId,
+          title: text(item.title),
+          description: text(item.description) || text(item['itunes:summary']),
+          audioUrl: enclosureUrl,
+          artworkUrl: attr(item['itunes:image'], 'href'),
+          durationSec: parseItunesDuration(item['itunes:duration']),
+          pubDateIso: item.pubDate ? new Date(text(item.pubDate)).toISOString() : new Date(0).toISOString(),
+          played: false,
+          chaptersUrl: null
+        }
+        return episode
+      })
+    )
+  ).filter((e): e is Episode => e !== null)
 
   return {
     name: text(channel.title),

@@ -1,12 +1,12 @@
+import { useMemo } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
-import { Play, Pause, ListPlus, X, Check } from 'lucide-react-native'
+import { Play, Pause, ListPlus, Check, Settings } from 'lucide-react-native'
 import type { Episode } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import { colors, radii, cardShadow } from '../theme'
 
-const HOME_QUEUE_LIMIT = 6
-const RECENT_LIMIT = 6
+const RECENT_LIMIT = 12
 
 function formatDuration(sec: number): string {
   if (!sec) return ''
@@ -18,12 +18,13 @@ function formatDuration(sec: number): string {
 
 interface Props {
   onOpenPlayer: (podcastId: string, episodeId: string) => void
+  onOpenSettings: () => void
 }
 
 // Mirrors the desktop app's HomeScreen.tsx: a featured banner for the most
-// recent unplayed episode, an up-next Queue strip, and a New Episodes list
-// for quickly queuing/playing without drilling into a show's episode list.
-export default function HomeScreen({ onOpenPlayer }: Props): React.JSX.Element {
+// recent unplayed episode, plus a New Episodes list for quickly queuing or
+// marking played without drilling into a show's episode list.
+export default function HomeScreen({ onOpenPlayer, onOpenSettings }: Props): React.JSX.Element {
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const queue = useStore((s) => s.queue)
@@ -32,22 +33,23 @@ export default function HomeScreen({ onOpenPlayer }: Props): React.JSX.Element {
   const loadEpisode = useStore((s) => s.loadEpisode)
   const togglePlay = useStore((s) => s.togglePlay)
   const addToQueue = useStore((s) => s.addToQueue)
-  const removeFromQueue = useStore((s) => s.removeFromQueue)
   const setPlayed = useStore((s) => s.setPlayed)
 
-  const podcastById = new Map(podcasts.map((p) => [p.id, p]))
-  const allEpisodes = Object.values(episodesByPodcast).flat()
-  const episodeById = new Map(allEpisodes.map((e) => [e.id, e]))
+  // Flattening/sorting every episode across every podcast is real work for a
+  // library with thousands of episodes — recomputing it on every render
+  // (including ones triggered by unrelated state like `playing` toggling)
+  // was making basic interactions like tapping Play feel heavy.
+  const podcastById = useMemo(() => new Map(podcasts.map((p) => [p.id, p])), [podcasts])
+  const allEpisodes = useMemo(() => Object.values(episodesByPodcast).flat(), [episodesByPodcast])
 
-  const upNext = queue
-    .map((id) => episodeById.get(id))
-    .filter((e): e is Episode => e !== undefined)
-    .slice(0, HOME_QUEUE_LIMIT)
-
-  const recent = allEpisodes
-    .filter((e) => !e.played)
-    .sort((a, b) => (a.pubDateIso < b.pubDateIso ? 1 : -1))
-    .slice(0, RECENT_LIMIT)
+  const recent = useMemo(
+    () =>
+      allEpisodes
+        .filter((e) => !e.played)
+        .sort((a, b) => (a.pubDateIso < b.pubDateIso ? 1 : -1))
+        .slice(0, RECENT_LIMIT),
+    [allEpisodes]
+  )
 
   const handlePlayToggle = (episodeId: string): void => {
     if (currentEpisodeId === episodeId) togglePlay()
@@ -59,16 +61,18 @@ export default function HomeScreen({ onOpenPlayer }: Props): React.JSX.Element {
   if (podcasts.length === 0) {
     return (
       <View style={styles.container}>
-        <Text style={styles.title}>Home</Text>
+        <View style={styles.header}>
+          <Text style={styles.title}>Home</Text>
+          <Pressable hitSlop={10} onPress={onOpenSettings}>
+            <Settings size={20} color={colors.textMuted} />
+          </Pressable>
+        </View>
         <Text style={styles.empty}>Subscribe to a podcast from Search to see it here.</Text>
       </View>
     )
   }
 
-  const renderEpisodeRow = (
-    ep: Episode,
-    opts: { showAddButton: boolean }
-  ): React.JSX.Element => {
+  const renderEpisodeRow = (ep: Episode): React.JSX.Element => {
     const podcast = podcastById.get(ep.podcastId)
     const isPlaying = currentEpisodeId === ep.id && playing
     const inQueue = queue.includes(ep.id)
@@ -96,27 +100,15 @@ export default function HomeScreen({ onOpenPlayer }: Props): React.JSX.Element {
         >
           <Check size={16} color={ep.played ? colors.accent : colors.textMuted} strokeWidth={ep.played ? 3 : 2} />
         </Pressable>
-        {opts.showAddButton ? (
-          <Pressable
-            hitSlop={10}
-            onPress={(e) => {
-              e.stopPropagation()
-              if (!inQueue) addToQueue(ep.id)
-            }}
-          >
-            <ListPlus size={16} color={inQueue ? colors.textDisabled : colors.textMuted} />
-          </Pressable>
-        ) : (
-          <Pressable
-            hitSlop={10}
-            onPress={(e) => {
-              e.stopPropagation()
-              removeFromQueue(ep.id)
-            }}
-          >
-            <X size={16} color={colors.textMuted} />
-          </Pressable>
-        )}
+        <Pressable
+          hitSlop={10}
+          onPress={(e) => {
+            e.stopPropagation()
+            if (!inQueue) addToQueue(ep.id)
+          }}
+        >
+          <ListPlus size={16} color={inQueue ? colors.textDisabled : colors.textMuted} />
+        </Pressable>
         <Pressable
           hitSlop={10}
           onPress={(e) => {
@@ -136,7 +128,12 @@ export default function HomeScreen({ onOpenPlayer }: Props): React.JSX.Element {
 
   return (
     <ScrollView style={styles.container}>
-      <Text style={styles.title}>Home</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>Home</Text>
+        <Pressable hitSlop={10} onPress={onOpenSettings}>
+          <Settings size={20} color={colors.textMuted} />
+        </Pressable>
+      </View>
 
       {featured && (
             <Pressable style={styles.banner} onPress={() => onOpenPlayer(featured.podcastId, featured.id)}>
@@ -172,16 +169,13 @@ export default function HomeScreen({ onOpenPlayer }: Props): React.JSX.Element {
             </Pressable>
           )}
 
-          <Text style={styles.sectionTitle}>Queue</Text>
-          {upNext.length === 0 ? (
-            <Text style={styles.empty}>Your queue is empty — add episodes below.</Text>
-          ) : (
-            <View style={styles.section}>{upNext.map((ep) => renderEpisodeRow(ep, { showAddButton: false }))}</View>
-          )}
-
       <Text style={styles.sectionTitle}>New Episodes</Text>
       <View style={[styles.section, { marginBottom: 20 }]}>
-        {recent.map((ep) => renderEpisodeRow(ep, { showAddButton: true }))}
+        {recent.length === 0 ? (
+          <Text style={styles.empty}>You're all caught up.</Text>
+        ) : (
+          recent.map((ep) => renderEpisodeRow(ep))
+        )}
       </View>
     </ScrollView>
   )
@@ -189,7 +183,14 @@ export default function HomeScreen({ onOpenPlayer }: Props): React.JSX.Element {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
-  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, paddingHorizontal: 20, marginBottom: 14 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    marginBottom: 14
+  },
+  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary },
   banner: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -25,6 +25,7 @@ export default function AudioEngine(): null {
   const seekRequestSec = useStore((s) => s.seekRequestSec)
   const playbackRate = useStore((s) => s.playbackRate)
   const positions = useStore((s) => s.positions)
+  const downloadedUris = useStore((s) => s.downloadedUris)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const podcasts = useStore((s) => s.podcasts)
   const queue = useStore((s) => s.queue)
@@ -50,12 +51,14 @@ export default function AudioEngine(): null {
 
   // useAudioPlayer's source argument is only read on the player's initial
   // creation — later changes must go through player.replace(), which is
-  // exactly what a persistent single player needs anyway.
+  // exactly what a persistent single player needs anyway. Prefers the
+  // downloaded local file over the network URL when one exists, so a
+  // downloaded episode plays offline instead of streaming.
   useEffect(() => {
     if (!episode || loadedEpisodeId.current === episode.id) return
     loadedEpisodeId.current = episode.id
-    player.replace(episode.audioUrl)
-  }, [episode?.id, episode?.audioUrl, player])
+    player.replace(downloadedUris[episode.id] ?? episode.audioUrl)
+  }, [episode?.id, episode?.audioUrl, downloadedUris, player])
 
   useEffect(() => {
     if (!status.isLoaded || !episode || seededPositionFor.current === episode.id) return

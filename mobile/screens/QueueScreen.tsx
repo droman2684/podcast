@@ -1,12 +1,22 @@
-import { useState } from 'react'
-import { View, Text, Pressable, ScrollView, StyleSheet, type GestureResponderHandlers } from 'react-native'
-import { GripVertical, Play, Pause } from 'lucide-react-native'
+import { useMemo, useState } from 'react'
+import {
+  View,
+  Text,
+  Pressable,
+  ScrollView,
+  Modal,
+  ActivityIndicator,
+  StyleSheet,
+  type GestureResponderHandlers
+} from 'react-native'
+import { GripVertical, Play, Pause, Info, X, Download, Trash2 } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { groupByPodcast } from '@shared/queueView'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import SwipeToDelete from '../components/SwipeToDelete'
 import DraggableList from '../components/DraggableList'
+import { stripHtml } from '../lib/stripHtml'
 import { colors, radii, cardShadow } from '../theme'
 
 interface QueueItem {
@@ -31,24 +41,32 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
   const playing = useStore((s) => s.playing)
   const loadEpisode = useStore((s) => s.loadEpisode)
   const togglePlay = useStore((s) => s.togglePlay)
+  const downloadedUris = useStore((s) => s.downloadedUris)
+  const downloadingIds = useStore((s) => s.downloadingIds)
+  const downloadEpisode = useStore((s) => s.downloadEpisode)
+  const removeDownload = useStore((s) => s.removeDownload)
 
   // Drag-to-reorder only applies to the plain manual order — once grouped
   // by show, "reorder" would mean something different (reorder within a
   // group? reorder the groups themselves?) that this list can't express,
   // so grouped view is browse/remove only.
   const [grouped, setGrouped] = useState(false)
+  const [detailItem, setDetailItem] = useState<QueueItem | null>(null)
 
-  const podcastById = new Map(podcasts.map((p) => [p.id, p]))
-  const items: QueueItem[] = []
-  for (const episodeId of queue) {
+  const podcastById = useMemo(() => new Map(podcasts.map((p) => [p.id, p])), [podcasts])
+
+  // O(1) lookup per queued episode rather than scanning every podcast's
+  // episode list per queue entry — that nested-loop scan, redone on every
+  // render, was part of why dragging in a large queue felt heavy.
+  const items = useMemo(() => {
+    const byEpisodeId = new Map<string, QueueItem>()
     for (const podcast of podcasts) {
-      const episode = episodesByPodcast[podcast.id]?.find((e) => e.id === episodeId)
-      if (episode) {
-        items.push({ podcast, episode })
-        break
+      for (const episode of episodesByPodcast[podcast.id] ?? []) {
+        byEpisodeId.set(episode.id, { podcast, episode })
       }
     }
-  }
+    return queue.map((id) => byEpisodeId.get(id)).filter((item): item is QueueItem => item !== undefined)
+  }, [queue, podcasts, episodesByPodcast])
 
   const handlePlayToggle = (episodeId: string): void => {
     if (currentEpisodeId === episodeId) togglePlay()
@@ -61,6 +79,8 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
     dragHandlers?: GestureResponderHandlers
   ): React.JSX.Element => {
     const isCurrent = currentEpisodeId === item.episode.id
+    const downloaded = Boolean(downloadedUris[item.episode.id])
+    const downloading = Boolean(downloadingIds[item.episode.id])
     return (
       <View style={[styles.row, isActive && styles.rowActive]}>
         {dragHandlers && (
@@ -80,6 +100,22 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
             </Text>
             <Text style={styles.podcastName}>{item.podcast.name}</Text>
           </View>
+        </Pressable>
+        <Pressable
+          hitSlop={10}
+          disabled={downloading}
+          onPress={() => (downloaded ? removeDownload(item.episode.id) : downloadEpisode(item.episode))}
+        >
+          {downloading ? (
+            <ActivityIndicator size="small" color={colors.textMuted} />
+          ) : downloaded ? (
+            <Trash2 size={17} color={colors.accent} />
+          ) : (
+            <Download size={17} color={colors.textMuted} />
+          )}
+        </Pressable>
+        <Pressable hitSlop={10} onPress={() => setDetailItem(item)}>
+          <Info size={17} color={colors.textMuted} />
         </Pressable>
         <Pressable hitSlop={10} onPress={() => handlePlayToggle(item.episode.id)}>
           {isCurrent && playing ? (
@@ -144,6 +180,43 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
           />
         </ScrollView>
       )}
+
+      <Modal
+        visible={detailItem !== null}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setDetailItem(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setDetailItem(null)}>
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            {detailItem && (
+              <>
+                <View style={styles.modalHeader}>
+                  <Artwork
+                    url={detailItem.episode.artworkUrl ?? detailItem.podcast.artworkUrl}
+                    size={48}
+                    radius={radii.artworkSm}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.epTitle} numberOfLines={2}>
+                      {detailItem.episode.title}
+                    </Text>
+                    <Text style={styles.podcastName}>{detailItem.podcast.name}</Text>
+                  </View>
+                  <Pressable hitSlop={10} onPress={() => setDetailItem(null)}>
+                    <X size={18} color={colors.textMuted} />
+                  </Pressable>
+                </View>
+                <ScrollView style={styles.modalBody}>
+                  <Text style={styles.modalDescription}>
+                    {stripHtml(detailItem.episode.description) || 'No description available.'}
+                  </Text>
+                </ScrollView>
+              </>
+            )}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   )
 }
@@ -192,5 +265,20 @@ const styles = StyleSheet.create({
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   epTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
   podcastName: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
-  empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40, paddingHorizontal: 30 }
+  empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40, paddingHorizontal: 30 },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end'
+  },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radii.modal,
+    borderTopRightRadius: radii.modal,
+    maxHeight: '70%',
+    padding: 20
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  modalBody: { marginTop: 4 },
+  modalDescription: { fontSize: 13, color: colors.textSecondary, lineHeight: 19, paddingBottom: 20 }
 })

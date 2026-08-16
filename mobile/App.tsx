@@ -11,6 +11,7 @@ import PodcastSettingsScreen from './screens/PodcastSettingsScreen'
 import SearchScreen from './screens/SearchScreen'
 import DiscoverScreen from './screens/DiscoverScreen'
 import QueueScreen from './screens/QueueScreen'
+import SettingsScreen from './screens/SettingsScreen'
 import TabBar, { type Tab } from './components/TabBar'
 import AudioEngine from './components/AudioEngine'
 
@@ -19,11 +20,14 @@ type Route =
   | { name: 'episodes'; podcastId: string }
   | { name: 'player'; podcastId: string; episodeId: string }
   | { name: 'podcastSettings'; podcastId: string }
+  | { name: 'settings' }
 
 export default function App(): React.JSX.Element {
   const authLoading = useStore((s) => s.authLoading)
   const signedIn = useStore((s) => s.signedIn)
   const initAuth = useStore((s) => s.initAuth)
+  const loadSettings = useStore((s) => s.loadSettings)
+  const loadDownloads = useStore((s) => s.loadDownloads)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const libraryLoaded = useStore((s) => s.libraryLoaded)
@@ -36,7 +40,12 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     initAuth()
-  }, [initAuth])
+    // Device-local prefs (skip durations, default library view) and the
+    // downloaded-episode file listing — neither tied to a user account, so
+    // both load regardless of sign-in state.
+    loadSettings()
+    loadDownloads()
+  }, [initAuth, loadSettings, loadDownloads])
 
   // Loads once per sign-in, not once per Library-tab visit — LibraryScreen
   // itself only re-fetches on an explicit pull-to-refresh.
@@ -65,6 +74,7 @@ export default function App(): React.JSX.Element {
   const goToTabs = (): void => setRoute({ name: 'tabs' })
   const goToEpisodes = (podcastId: string): void => setRoute({ name: 'episodes', podcastId })
   const openSettings = (podcastId: string): void => setRoute({ name: 'podcastSettings', podcastId })
+  const goToAppSettings = (): void => setRoute({ name: 'settings' })
 
   // Opens the Player screen for an episode. Only (re)loads it into the
   // global engine if it isn't already the current one — re-opening the
@@ -80,7 +90,7 @@ export default function App(): React.JSX.Element {
   if (route.name === 'tabs') {
     showTabBar = true
     if (tab === 'home') {
-      screen = <HomeScreen onOpenPlayer={openPlayer} />
+      screen = <HomeScreen onOpenPlayer={openPlayer} onOpenSettings={goToAppSettings} />
     } else if (tab === 'library') {
       screen = <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
     } else if (tab === 'search') {
@@ -109,6 +119,8 @@ export default function App(): React.JSX.Element {
     ) : (
       <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
     )
+  } else if (route.name === 'settings') {
+    screen = <SettingsScreen onBack={goToTabs} />
   } else {
     const podcast = podcasts.find((p) => p.id === route.podcastId)
     const episode = episodesByPodcast[route.podcastId]?.find((e) => e.id === route.episodeId)

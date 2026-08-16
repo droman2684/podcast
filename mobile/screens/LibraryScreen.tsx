@@ -21,10 +21,12 @@ export default function LibraryScreen({ onSelectPodcast, onOpenSettings }: Props
   const error = useStore((s) => s.libraryError)
   const loadLibrary = useStore((s) => s.loadLibrary)
   const unsubscribe = useStore((s) => s.unsubscribe)
+  const defaultLibraryView = useStore((s) => s.defaultLibraryView)
 
-  // Defaults to grid, matching the desktop Library screen's default —
-  // mirrors src/renderer/src/components/screens/LibraryScreen.tsx exactly.
-  const [view, setView] = useState<ViewMode>('grid')
+  // Seeded from the user's Settings preference. This screen remounts on
+  // every tab visit (see comment below), so re-reading the store default
+  // here each time is intentional, not a bug.
+  const [view, setView] = useState<ViewMode>(defaultLibraryView)
 
   // The initial load is triggered once at the app root (see App.tsx) rather
   // than here — this screen unmounts and remounts every time the tab bar
