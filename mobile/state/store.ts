@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import type { Podcast, Episode } from '@shared/types'
+import type { Podcast, Episode, PodcastSettings } from '@shared/types'
+import type { DiscoverPodcast } from '@shared/types'
 import { supabase } from '../lib/supabase'
 import { parseFeed } from '../lib/rss'
 
@@ -23,6 +24,8 @@ interface AppState {
   podcasts: Podcast[]
   episodesByPodcast: Record<string, Episode[]>
   positions: Record<string, number>
+  podcastSettings: Record<string, PodcastSettings>
+  queue: string[]
   libraryLoading: boolean
   libraryError: string | null
 
@@ -32,11 +35,28 @@ interface AppState {
   signOut: () => Promise<void>
 
   loadLibrary: () => Promise<void>
+  subscribe: (podcast: DiscoverPodcast) => Promise<void>
+  unsubscribe: (podcastId: string) => Promise<void>
+  setNotify: (podcastId: string, notify: boolean) => Promise<void>
+
   savePosition: (episodeId: string, positionSec: number) => Promise<void>
-  markPlayed: (episodeId: string, podcastId: string) => Promise<void>
+  setPlayed: (episodeId: string, podcastId: string, played: boolean) => Promise<void>
+
+  addToQueue: (episodeId: string) => Promise<void>
+  removeFromQueue: (episodeId: string) => Promise<void>
 }
 
-export const useStore = create<AppState>((set) => ({
+async function saveQueue(episodeIds: string[]): Promise<void> {
+  const userId = await currentUserId()
+  if (!userId) return
+  await supabase.from('queue').upsert({
+    user_id: userId,
+    episode_ids: episodeIds,
+    updated_at: new Date().toISOString()
+  })
+}
+
+export const useStore = create<AppState>((set, get) => ({
   authLoading: true,
   signedIn: false,
   userEmail: null,
@@ -44,6 +64,8 @@ export const useStore = create<AppState>((set) => ({
   podcasts: [],
   episodesByPodcast: {},
   positions: {},
+  podcastSettings: {},
+  queue: [],
   libraryLoading: false,
   libraryError: null,
 
@@ -71,14 +93,14 @@ export const useStore = create<AppState>((set) => ({
 
   signOut: async () => {
     await supabase.auth.signOut()
-    set({ podcasts: [], episodesByPodcast: {}, positions: {} })
+    set({ podcasts: [], episodesByPodcast: {}, positions: {}, podcastSettings: {}, queue: [] })
   },
 
-  // Pulls the subscription list synced from desktop, then fetches each
-  // feed's RSS directly (there's no main-process cache to lean on here) to
-  // get episode lists and artwork/name — the same split the desktop app
-  // itself uses: `podcasts` rows are identity/settings only, never the
-  // RSS-derived fields.
+  // Pulls the subscription list synced from desktop (or a previous mobile
+  // session), then fetches each feed's RSS directly (there's no
+  // main-process cache to lean on here) to get episode lists and
+  // artwork/name — the same split the desktop app itself uses: `podcasts`
+  // rows are identity/settings only, never the RSS-derived fields.
   loadLibrary: async () => {
     set({ libraryLoading: true, libraryError: null })
     try {
@@ -108,6 +130,22 @@ export const useStore = create<AppState>((set) => ({
       const playedByEpisode = new Map<string, boolean>(
         (playedRows ?? []).map((r) => [r.episode_id as string, r.played as boolean])
       )
+
+      const { data: settingsRows, error: settingsErr } = await supabase
+        .from('podcast_settings')
+        .select('*')
+        .eq('user_id', userId)
+      if (settingsErr) throw new Error(settingsErr.message)
+      const podcastSettings: Record<string, PodcastSettings> = {}
+      for (const row of settingsRows ?? []) podcastSettings[row.podcast_id] = { notify: row.notify }
+
+      const { data: queueRow, error: queueErr } = await supabase
+        .from('queue')
+        .select('*')
+        .eq('user_id', userId)
+        .maybeSingle()
+      if (queueErr) throw new Error(queueErr.message)
+      const queue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
 
       const podcasts: Podcast[] = []
       const episodesByPodcast: Record<string, Episode[]> = {}
@@ -142,10 +180,64 @@ export const useStore = create<AppState>((set) => ({
         }
       }
 
-      set({ podcasts, episodesByPodcast, positions, libraryLoading: false })
+      set({ podcasts, episodesByPodcast, positions, podcastSettings, queue, libraryLoading: false })
     } catch (err) {
       set({ libraryLoading: false, libraryError: err instanceof Error ? err.message : String(err) })
     }
+  },
+
+  subscribe: async (podcast) => {
+    const userId = await currentUserId()
+    if (!userId) throw new Error('Not signed in')
+    const { error } = await supabase.from('podcasts').upsert({
+      user_id: userId,
+      id: podcast.id,
+      feed_url: podcast.feedUrl,
+      is_private: false,
+      custom_artwork_url: null,
+      updated_at: new Date().toISOString(),
+      deleted_at: null
+    })
+    if (error) throw new Error(error.message)
+    await get().loadLibrary()
+  },
+
+  // Mirrors the desktop app's unsubscribe cascade (src/main/subscriptions.ts
+  // applyUnsubscribeCascade) as far as it applies here: drop the podcast
+  // locally, tombstone it remotely, and strip its episodes out of the
+  // queue. Stations aren't a mobile concept yet, so no station cleanup.
+  unsubscribe: async (podcastId) => {
+    const userId = await currentUserId()
+    if (!userId) return
+    const removedEpisodeIds = new Set((get().episodesByPodcast[podcastId] ?? []).map((e) => e.id))
+    const previousQueue = get().queue
+    const nextQueue = previousQueue.filter((id) => !removedEpisodeIds.has(id))
+    const queueChanged = nextQueue.length !== previousQueue.length
+    set((state) => ({
+      podcasts: state.podcasts.filter((p) => p.id !== podcastId),
+      episodesByPodcast: Object.fromEntries(
+        Object.entries(state.episodesByPodcast).filter(([id]) => id !== podcastId)
+      ),
+      queue: nextQueue
+    }))
+    await supabase
+      .from('podcasts')
+      .upsert({ user_id: userId, id: podcastId, deleted_at: new Date().toISOString() })
+    if (queueChanged) await saveQueue(nextQueue)
+  },
+
+  setNotify: async (podcastId, notify) => {
+    set((state) => ({
+      podcastSettings: { ...state.podcastSettings, [podcastId]: { notify } }
+    }))
+    const userId = await currentUserId()
+    if (!userId) return
+    await supabase.from('podcast_settings').upsert({
+      user_id: userId,
+      podcast_id: podcastId,
+      notify,
+      updated_at: new Date().toISOString()
+    })
   },
 
   savePosition: async (episodeId, positionSec) => {
@@ -160,23 +252,39 @@ export const useStore = create<AppState>((set) => ({
     })
   },
 
-  markPlayed: async (episodeId, podcastId) => {
-    set((state) => ({
-      episodesByPodcast: {
-        ...state.episodesByPodcast,
-        [podcastId]: (state.episodesByPodcast[podcastId] ?? []).map((e) =>
-          e.id === episodeId ? { ...e, played: true } : e
+  setPlayed: async (episodeId, podcastId, played) => {
+    set((state) => {
+      const episodes = (state.episodesByPodcast[podcastId] ?? []).map((e) =>
+        e.id === episodeId ? { ...e, played } : e
+      )
+      return {
+        episodesByPodcast: { ...state.episodesByPodcast, [podcastId]: episodes },
+        podcasts: state.podcasts.map((p) =>
+          p.id === podcastId ? { ...p, unread: episodes.filter((e) => !e.played).length } : p
         )
       }
-    }))
+    })
     const userId = await currentUserId()
     if (!userId) return
     await supabase.from('episode_played').upsert({
       user_id: userId,
       episode_id: episodeId,
       podcast_id: podcastId,
-      played: true,
+      played,
       updated_at: new Date().toISOString()
     })
+  },
+
+  addToQueue: async (episodeId) => {
+    if (get().queue.includes(episodeId)) return
+    const next = [...get().queue, episodeId]
+    set({ queue: next })
+    await saveQueue(next)
+  },
+
+  removeFromQueue: async (episodeId) => {
+    const next = get().queue.filter((id) => id !== episodeId)
+    set({ queue: next })
+    await saveQueue(next)
   }
 }))

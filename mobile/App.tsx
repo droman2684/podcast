@@ -6,11 +6,17 @@ import SignInScreen from './screens/SignInScreen'
 import LibraryScreen from './screens/LibraryScreen'
 import EpisodeListScreen from './screens/EpisodeListScreen'
 import PlayerScreen from './screens/PlayerScreen'
+import PodcastSettingsScreen from './screens/PodcastSettingsScreen'
+import SearchScreen from './screens/SearchScreen'
+import DiscoverScreen from './screens/DiscoverScreen'
+import QueueScreen from './screens/QueueScreen'
+import TabBar, { type Tab } from './components/TabBar'
 
 type Route =
-  | { name: 'library' }
+  | { name: 'tabs' }
   | { name: 'episodes'; podcastId: string }
   | { name: 'player'; podcastId: string; episodeId: string }
+  | { name: 'podcastSettings'; podcastId: string }
 
 export default function App(): React.JSX.Element {
   const authLoading = useStore((s) => s.authLoading)
@@ -19,7 +25,8 @@ export default function App(): React.JSX.Element {
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
 
-  const [route, setRoute] = useState<Route>({ name: 'library' })
+  const [tab, setTab] = useState<Tab>('library')
+  const [route, setRoute] = useState<Route>({ name: 'tabs' })
 
   useEffect(() => {
     initAuth()
@@ -43,26 +50,62 @@ export default function App(): React.JSX.Element {
     )
   }
 
+  const goToTabs = (): void => setRoute({ name: 'tabs' })
+  const goToEpisodes = (podcastId: string): void => setRoute({ name: 'episodes', podcastId })
+  const goToPlayer = (podcastId: string, episodeId: string): void =>
+    setRoute({ name: 'player', podcastId, episodeId })
+
+  const handleAdvance = (episodeId: string): void => {
+    for (const podcast of podcasts) {
+      if (episodesByPodcast[podcast.id]?.some((e) => e.id === episodeId)) {
+        goToPlayer(podcast.id, episodeId)
+        return
+      }
+    }
+    goToTabs()
+  }
+
   let screen: React.JSX.Element
-  if (route.name === 'library') {
-    screen = (
-      <LibraryScreen
-        onSelectPodcast={(podcastId) => setRoute({ name: 'episodes', podcastId })}
-        onSignOut={() => setRoute({ name: 'library' })}
-      />
-    )
+  let showTabBar = false
+
+  if (route.name === 'tabs') {
+    showTabBar = true
+    if (tab === 'library') {
+      screen = (
+        <LibraryScreen
+          onSelectPodcast={goToEpisodes}
+          onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
+        />
+      )
+    } else if (tab === 'search') {
+      screen = <SearchScreen />
+    } else if (tab === 'discover') {
+      screen = <DiscoverScreen />
+    } else {
+      screen = <QueueScreen onPlay={goToPlayer} />
+    }
   } else if (route.name === 'episodes') {
     const podcast = podcasts.find((p) => p.id === route.podcastId)
     screen = podcast ? (
       <EpisodeListScreen
         podcast={podcast}
-        onBack={() => setRoute({ name: 'library' })}
-        onPlay={(episodeId) => setRoute({ name: 'player', podcastId: podcast.id, episodeId })}
+        onBack={goToTabs}
+        onPlay={(episodeId) => goToPlayer(podcast.id, episodeId)}
       />
     ) : (
       <LibraryScreen
-        onSelectPodcast={(podcastId) => setRoute({ name: 'episodes', podcastId })}
-        onSignOut={() => setRoute({ name: 'library' })}
+        onSelectPodcast={goToEpisodes}
+        onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
+      />
+    )
+  } else if (route.name === 'podcastSettings') {
+    const podcast = podcasts.find((p) => p.id === route.podcastId)
+    screen = podcast ? (
+      <PodcastSettingsScreen podcast={podcast} onBack={goToTabs} onUnsubscribed={goToTabs} />
+    ) : (
+      <LibraryScreen
+        onSelectPodcast={goToEpisodes}
+        onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
       />
     )
   } else {
@@ -73,19 +116,21 @@ export default function App(): React.JSX.Element {
         <PlayerScreen
           episode={episode}
           podcast={podcast}
-          onBack={() => setRoute({ name: 'episodes', podcastId: podcast.id })}
+          onBack={() => goToEpisodes(podcast.id)}
+          onAdvance={handleAdvance}
         />
       ) : (
         <LibraryScreen
-          onSelectPodcast={(podcastId) => setRoute({ name: 'episodes', podcastId })}
-          onSignOut={() => setRoute({ name: 'library' })}
+          onSelectPodcast={goToEpisodes}
+          onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
         />
       )
   }
 
   return (
     <>
-      {screen}
+      <View style={{ flex: 1 }}>{screen}</View>
+      {showTabBar && <TabBar active={tab} onSelect={setTab} />}
       <StatusBar style="auto" />
     </>
   )
