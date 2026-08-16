@@ -45,7 +45,8 @@
           "enableBackgroundRecording": true
         }
       ],
-      "expo-asset"
+      "expo-asset",
+      "./plugins/withRemoteControlEvents.js"
     ],
     "extra": {
       "eas": {

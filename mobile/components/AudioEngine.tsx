@@ -98,9 +98,12 @@ export default function AudioEngine(): null {
         },
         { showSeekBackward: true, showSeekForward: true }
       )
-    } catch {
+    } catch (err) {
       // Lock-screen metadata is a nice-to-have — playback itself doesn't
-      // depend on it.
+      // depend on it — but log rather than silently swallow, since a
+      // silent failure here is indistinguishable from "it just doesn't
+      // show controls."
+      console.error('[lockscreen] setActiveForLockScreen failed:', err)
     }
   }, [status.isLoaded, episode?.id, episode?.title, episode?.artworkUrl, podcast?.name, podcast?.artworkUrl, player])
 
