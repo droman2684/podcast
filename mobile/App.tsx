@@ -3,6 +3,7 @@ import { View, ActivityIndicator } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { useStore } from './state/store'
 import SignInScreen from './screens/SignInScreen'
+import HomeScreen from './screens/HomeScreen'
 import LibraryScreen from './screens/LibraryScreen'
 import EpisodeListScreen from './screens/EpisodeListScreen'
 import PlayerScreen from './screens/PlayerScreen'
@@ -11,6 +12,7 @@ import SearchScreen from './screens/SearchScreen'
 import DiscoverScreen from './screens/DiscoverScreen'
 import QueueScreen from './screens/QueueScreen'
 import TabBar, { type Tab } from './components/TabBar'
+import AudioEngine from './components/AudioEngine'
 
 type Route =
   | { name: 'tabs' }
@@ -26,8 +28,10 @@ export default function App(): React.JSX.Element {
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const libraryLoaded = useStore((s) => s.libraryLoaded)
   const loadLibrary = useStore((s) => s.loadLibrary)
+  const currentEpisodeId = useStore((s) => s.currentEpisodeId)
+  const loadEpisode = useStore((s) => s.loadEpisode)
 
-  const [tab, setTab] = useState<Tab>('library')
+  const [tab, setTab] = useState<Tab>('home')
   const [route, setRoute] = useState<Route>({ name: 'tabs' })
 
   useEffect(() => {
@@ -60,17 +64,14 @@ export default function App(): React.JSX.Element {
 
   const goToTabs = (): void => setRoute({ name: 'tabs' })
   const goToEpisodes = (podcastId: string): void => setRoute({ name: 'episodes', podcastId })
-  const goToPlayer = (podcastId: string, episodeId: string): void =>
-    setRoute({ name: 'player', podcastId, episodeId })
+  const openSettings = (podcastId: string): void => setRoute({ name: 'podcastSettings', podcastId })
 
-  const handleAdvance = (episodeId: string): void => {
-    for (const podcast of podcasts) {
-      if (episodesByPodcast[podcast.id]?.some((e) => e.id === episodeId)) {
-        goToPlayer(podcast.id, episodeId)
-        return
-      }
-    }
-    goToTabs()
+  // Opens the Player screen for an episode. Only (re)loads it into the
+  // global engine if it isn't already the current one — re-opening the
+  // player for what's already playing shouldn't reset its position/state.
+  const openPlayer = (podcastId: string, episodeId: string): void => {
+    if (currentEpisodeId !== episodeId) loadEpisode(episodeId, { autoplay: false })
+    setRoute({ name: 'player', podcastId, episodeId })
   }
 
   let screen: React.JSX.Element
@@ -78,19 +79,16 @@ export default function App(): React.JSX.Element {
 
   if (route.name === 'tabs') {
     showTabBar = true
-    if (tab === 'library') {
-      screen = (
-        <LibraryScreen
-          onSelectPodcast={goToEpisodes}
-          onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
-        />
-      )
+    if (tab === 'home') {
+      screen = <HomeScreen onOpenPlayer={openPlayer} />
+    } else if (tab === 'library') {
+      screen = <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
     } else if (tab === 'search') {
       screen = <SearchScreen />
     } else if (tab === 'discover') {
       screen = <DiscoverScreen />
     } else {
-      screen = <QueueScreen onPlay={goToPlayer} />
+      screen = <QueueScreen onPlay={openPlayer} />
     }
   } else if (route.name === 'episodes') {
     const podcast = podcasts.find((p) => p.id === route.podcastId)
@@ -98,49 +96,36 @@ export default function App(): React.JSX.Element {
       <EpisodeListScreen
         podcast={podcast}
         onBack={goToTabs}
-        onPlay={(episodeId) => goToPlayer(podcast.id, episodeId)}
-        onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
+        onPlay={(episodeId) => openPlayer(podcast.id, episodeId)}
+        onOpenSettings={openSettings}
       />
     ) : (
-      <LibraryScreen
-        onSelectPodcast={goToEpisodes}
-        onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
-      />
+      <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
     )
   } else if (route.name === 'podcastSettings') {
     const podcast = podcasts.find((p) => p.id === route.podcastId)
     screen = podcast ? (
       <PodcastSettingsScreen podcast={podcast} onBack={goToTabs} onUnsubscribed={goToTabs} />
     ) : (
-      <LibraryScreen
-        onSelectPodcast={goToEpisodes}
-        onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
-      />
+      <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
     )
   } else {
     const podcast = podcasts.find((p) => p.id === route.podcastId)
     const episode = episodesByPodcast[route.podcastId]?.find((e) => e.id === route.episodeId)
     screen =
       podcast && episode ? (
-        <PlayerScreen
-          episode={episode}
-          podcast={podcast}
-          onBack={() => goToEpisodes(podcast.id)}
-          onAdvance={handleAdvance}
-        />
+        <PlayerScreen episode={episode} podcast={podcast} onBack={() => goToEpisodes(podcast.id)} />
       ) : (
-        <LibraryScreen
-          onSelectPodcast={goToEpisodes}
-          onOpenSettings={(podcastId) => setRoute({ name: 'podcastSettings', podcastId })}
-        />
+        <LibraryScreen onSelectPodcast={goToEpisodes} onOpenSettings={openSettings} />
       )
   }
 
   return (
-    <>
+    <View style={{ flex: 1 }}>
+      <AudioEngine />
       <View style={{ flex: 1 }}>{screen}</View>
       {showTabBar && <TabBar active={tab} onSelect={setTab} />}
       <StatusBar style="auto" />
-    </>
+    </View>
   )
 }

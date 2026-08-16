@@ -1,15 +1,17 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import { View, Text, Pressable, StyleSheet, type LayoutChangeEvent } from 'react-native'
-import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
-import { removeFromQueueOnFinish } from '../lib/queueHelpers'
 import Artwork from '../components/Artwork'
 import { colors, radii } from '../theme'
 
-const SAVE_INTERVAL_MS = 5000
 const SKIP_SEC = 15
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2]
+
+function nextSpeed(current: number): number {
+  const idx = SPEEDS.indexOf(current)
+  return SPEEDS[(idx === -1 ? 0 : idx + 1) % SPEEDS.length]
+}
 
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return '0:00'
@@ -22,85 +24,28 @@ interface Props {
   episode: Episode
   podcast: Podcast
   onBack: () => void
-  onAdvance: (episodeId: string) => void
 }
 
-export default function PlayerScreen({ episode, podcast, onBack, onAdvance }: Props): React.JSX.Element {
-  const positions = useStore((s) => s.positions)
-  const queue = useStore((s) => s.queue)
-  const savePosition = useStore((s) => s.savePosition)
-  const setPlayed = useStore((s) => s.setPlayed)
-  const removeFromQueue = useStore((s) => s.removeFromQueue)
-
-  const player = useAudioPlayer(episode.audioUrl)
-  const status = useAudioPlayerStatus(player)
-  const seeked = useRef(false)
-  const finished = useRef(false)
-  const [speedIndex, setSpeedIndex] = useState(0)
+// A thin view onto the global AudioEngine (components/AudioEngine.tsx) —
+// this screen no longer owns a player instance, so navigating away doesn't
+// stop playback and Home/Queue see the same live state.
+export default function PlayerScreen({ episode, podcast, onBack }: Props): React.JSX.Element {
+  const playing = useStore((s) => s.playing)
+  const currentTimeSec = useStore((s) => s.currentTimeSec)
+  const duration = useStore((s) => s.duration)
+  const playbackRate = useStore((s) => s.playbackRate)
+  const togglePlay = useStore((s) => s.togglePlay)
+  const requestSeek = useStore((s) => s.requestSeek)
+  const setPlaybackRate = useStore((s) => s.setPlaybackRate)
   const [barWidth, setBarWidth] = useState(0)
 
-  useEffect(() => {
-    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true }).catch(() => {})
-  }, [])
-
-  // Resume from the saved position once the player has actually loaded the
-  // source — seeking before that silently no-ops.
-  useEffect(() => {
-    if (seeked.current || !status.isLoaded) return
-    const saved = positions[episode.id] ?? 0
-    if (saved > 0) player.seekTo(saved)
-    seeked.current = true
-  }, [status.isLoaded, episode.id, player, positions])
-
-  useEffect(() => {
-    if (!status.isLoaded) return
-    try {
-      player.setActiveForLockScreen(
-        true,
-        {
-          title: episode.title,
-          artist: podcast.name,
-          artworkUrl: episode.artworkUrl ?? podcast.artworkUrl ?? undefined
-        },
-        { showSeekBackward: true, showSeekForward: true }
-      )
-    } catch {
-      // Lock-screen metadata is a nice-to-have — playback itself doesn't
-      // depend on it, so a failure here shouldn't surface as an error.
-    }
-  }, [status.isLoaded, episode.id, episode.title, episode.artworkUrl, podcast.name, podcast.artworkUrl, player])
-
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (status.playing && status.currentTime > 0) {
-        savePosition(episode.id, status.currentTime)
-      }
-    }, SAVE_INTERVAL_MS)
-    return () => clearInterval(interval)
-  }, [status.playing, status.currentTime, episode.id, savePosition])
-
-  useEffect(() => {
-    if (!status.didJustFinish || finished.current) return
-    finished.current = true
-    savePosition(episode.id, 0)
-    setPlayed(episode.id, podcast.id, true)
-    const nextId = removeFromQueueOnFinish(queue, episode.id, removeFromQueue)
-    if (nextId) onAdvance(nextId)
-  }, [status.didJustFinish, episode.id, podcast.id, queue, savePosition, setPlayed, removeFromQueue, onAdvance])
-
   const seekByBarTap = (x: number): void => {
-    if (barWidth <= 0 || status.duration <= 0) return
+    if (barWidth <= 0 || duration <= 0) return
     const ratio = Math.min(1, Math.max(0, x / barWidth))
-    player.seekTo(ratio * status.duration)
+    requestSeek(ratio * duration)
   }
 
-  const cycleSpeed = (): void => {
-    const next = (speedIndex + 1) % SPEEDS.length
-    setSpeedIndex(next)
-    player.playbackRate = SPEEDS[next]
-  }
-
-  const progress = status.duration > 0 ? status.currentTime / status.duration : 0
+  const progress = duration > 0 ? currentTimeSec / duration : 0
 
   return (
     <View style={styles.container}>
@@ -125,27 +70,24 @@ export default function PlayerScreen({ episode, podcast, onBack, onAdvance }: Pr
         <View style={[styles.barFill, { width: `${progress * 100}%` }]} />
       </Pressable>
       <View style={styles.timeRow}>
-        <Text style={styles.timeText}>{formatTime(status.currentTime)}</Text>
-        <Text style={styles.timeText}>{formatTime(status.duration)}</Text>
+        <Text style={styles.timeText}>{formatTime(currentTimeSec)}</Text>
+        <Text style={styles.timeText}>{formatTime(duration)}</Text>
       </View>
 
       <View style={styles.controls}>
-        <Pressable onPress={() => player.seekTo(Math.max(0, status.currentTime - SKIP_SEC))}>
+        <Pressable onPress={() => requestSeek(Math.max(0, currentTimeSec - SKIP_SEC))}>
           <Text style={styles.skipBtn}>-15s</Text>
         </Pressable>
-        <Pressable
-          style={styles.playButton}
-          onPress={() => (status.playing ? player.pause() : player.play())}
-        >
-          <Text style={styles.playButtonText}>{status.playing ? 'Pause' : 'Play'}</Text>
+        <Pressable style={styles.playButton} onPress={togglePlay}>
+          <Text style={styles.playButtonText}>{playing ? 'Pause' : 'Play'}</Text>
         </Pressable>
-        <Pressable onPress={() => player.seekTo(Math.min(status.duration, status.currentTime + SKIP_SEC))}>
+        <Pressable onPress={() => requestSeek(Math.min(duration, currentTimeSec + SKIP_SEC))}>
           <Text style={styles.skipBtn}>+15s</Text>
         </Pressable>
       </View>
 
-      <Pressable style={styles.speedBtn} onPress={cycleSpeed}>
-        <Text style={styles.speedText}>{SPEEDS[speedIndex]}x</Text>
+      <Pressable style={styles.speedBtn} onPress={() => setPlaybackRate(nextSpeed(playbackRate))}>
+        <Text style={styles.speedText}>{playbackRate}x</Text>
       </Pressable>
     </View>
   )

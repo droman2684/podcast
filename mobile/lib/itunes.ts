@@ -1,11 +1,10 @@
-import type { DiscoverPodcast, TrendingEpisode } from '@shared/types'
+import type { DiscoverPodcast } from '@shared/types'
 import { hashId } from './hash'
-import { parseFeed } from './rss'
 
-// Mirrors the desktop app's src/main/search.ts, recommendations.ts, and
-// trendingEpisodes.ts against the same public iTunes endpoints (no auth
-// needed) — kept as a separate implementation since it needs hashId() to be
-// async here (expo-crypto) where desktop's is sync (node:crypto).
+// Mirrors the desktop app's src/main/search.ts and recommendations.ts
+// against the same public iTunes endpoints (no auth needed) — kept as a
+// separate implementation since it needs hashId() to be async here
+// (expo-crypto) where desktop's is sync (node:crypto).
 
 interface ITunesResult {
   collectionId: number
@@ -117,63 +116,6 @@ function sample<T>(arr: T[], count: number): T[] {
 
 export async function getCategoryPicks(category: string, count = 6): Promise<DiscoverPodcast[]> {
   return sample(await getTopPodcasts(category), count)
-}
-
-const WINDOW_MS = 72 * 60 * 60 * 1000
-const SCAN_LIMIT = 40
-const FETCH_CONCURRENCY = 6
-const RESULT_COUNT = 10
-const TRENDING_CACHE_TTL_MS = 30 * 60 * 1000
-const trendingCache = new Map<string, { fetchedAt: number; items: TrendingEpisode[] }>()
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  limit: number,
-  fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = []
-  for (let i = 0; i < items.length; i += limit) {
-    results.push(...(await Promise.all(items.slice(i, i + limit).map(fn))))
-  }
-  return results
-}
-
-export async function getTrendingEpisodes(category: string): Promise<TrendingEpisode[]> {
-  const cached = trendingCache.get(category)
-  if (cached && Date.now() - cached.fetchedAt < TRENDING_CACHE_TTL_MS) return cached.items
-
-  const shows = (await getTopPodcasts(category)).slice(0, SCAN_LIMIT)
-  const cutoff = Date.now() - WINDOW_MS
-
-  const perShow = await mapWithConcurrency(shows, FETCH_CONCURRENCY, async (show) => {
-    try {
-      const parsed = await parseFeed(show.feedUrl, show.id)
-      const recent = parsed.episodes
-        .filter((e) => e.audioUrl && new Date(e.pubDateIso).getTime() >= cutoff)
-        .sort((a, b) => new Date(b.pubDateIso).getTime() - new Date(a.pubDateIso).getTime())[0]
-      if (!recent) return null
-      const item: TrendingEpisode = {
-        id: recent.id,
-        title: recent.title,
-        audioUrl: recent.audioUrl,
-        artworkUrl: recent.artworkUrl,
-        durationSec: recent.durationSec,
-        pubDateIso: recent.pubDateIso,
-        podcastId: show.id,
-        podcastFeedUrl: show.feedUrl,
-        podcastName: show.name,
-        podcastArtworkUrl: show.artworkUrl
-      }
-      return item
-    } catch (err) {
-      console.error(`Failed to fetch feed for trending episodes (${show.feedUrl}):`, err)
-      return null
-    }
-  })
-
-  const items = perShow.filter((e): e is TrendingEpisode => !!e).slice(0, RESULT_COUNT)
-  trendingCache.set(category, { fetchedAt: Date.now(), items })
-  return items
 }
 
 function todayKey(): string {

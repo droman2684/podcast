@@ -56,6 +56,25 @@ interface AppState {
 
   addToQueue: (episodeId: string) => Promise<void>
   removeFromQueue: (episodeId: string) => Promise<void>
+  reorderQueue: (episodeIds: string[]) => Promise<void>
+
+  // Live playback state, read/written by AudioEngine (components/AudioEngine.tsx,
+  // mounted once at the app root) and by any screen that wants to control or
+  // display playback — mirrors the desktop app's useAudioEngine.ts pattern of
+  // one persistent player driven by global store state, rather than each
+  // screen owning its own player instance.
+  currentEpisodeId: string | null
+  playing: boolean
+  currentTimeSec: number
+  duration: number
+  seekRequestSec: number | null
+  playbackRate: number
+  loadEpisode: (episodeId: string, opts?: { autoplay?: boolean }) => void
+  togglePlay: () => void
+  requestSeek: (sec: number) => void
+  clearSeekRequest: () => void
+  setPlaybackTime: (currentTimeSec: number, duration: number) => void
+  setPlaybackRate: (rate: number) => void
 }
 
 async function saveQueue(episodeIds: string[]): Promise<void> {
@@ -97,6 +116,13 @@ export const useStore = create<AppState>((set, get) => ({
   libraryLoading: false,
   libraryLoaded: false,
   libraryError: null,
+
+  currentEpisodeId: null,
+  playing: false,
+  currentTimeSec: 0,
+  duration: 0,
+  seekRequestSec: null,
+  playbackRate: 1,
 
   initAuth: async () => {
     const { data } = await supabase.auth.getSession()
@@ -365,5 +391,27 @@ export const useStore = create<AppState>((set, get) => ({
     const next = get().queue.filter((id) => id !== episodeId)
     set({ queue: next })
     await saveQueue(next)
-  }
+  },
+
+  reorderQueue: async (episodeIds) => {
+    set({ queue: episodeIds })
+    await saveQueue(episodeIds)
+  },
+
+  loadEpisode: (episodeId, opts) => {
+    const changed = get().currentEpisodeId !== episodeId
+    set({
+      currentEpisodeId: episodeId,
+      playing: opts?.autoplay ?? true,
+      ...(changed ? { currentTimeSec: 0, duration: 0 } : {})
+    })
+  },
+
+  togglePlay: () => set((state) => ({ playing: !state.playing })),
+
+  requestSeek: (sec) => set({ seekRequestSec: sec }),
+  clearSeekRequest: () => set({ seekRequestSec: null }),
+
+  setPlaybackTime: (currentTimeSec, duration) => set({ currentTimeSec, duration }),
+  setPlaybackRate: (rate) => set({ playbackRate: rate })
 }))
