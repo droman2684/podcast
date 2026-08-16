@@ -1,0 +1,23 @@
+diff --git a/node_modules/expo-audio/ios/MediaController.swift b/node_modules/expo-audio/ios/MediaController.swift
+index 2dd3fb2..d71fee5 100644
+--- a/node_modules/expo-audio/ios/MediaController.swift
++++ b/node_modules/expo-audio/ios/MediaController.swift
+@@ -22,6 +22,18 @@ class MediaController {
+ 
+     DispatchQueue.main.async {
+       if let player {
++        // Without re-asserting .playback here, iOS keeps playing audio in the
++        // background (that only needs UIBackgroundModes + the session category
++        // set once via setAudioModeAsync) but silently declines to surface a
++        // Now Playing card on the lock screen / Control Center / CarPlay, even
++        // though nowPlayingInfo and the remote command targets are otherwise
++        // configured correctly. Matches expo/expo PR #40919, unreleased as of
++        // expo-audio 1.1.1 (patched locally via patch-package).
++        do {
++          try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [])
++        } catch {
++          print("[expo-audio] Failed to configure audio session for lockscreen controls: \(error.localizedDescription)")
++        }
+         self.enableRemoteCommands(options: options)
+         self.updateNowPlayingInfo(for: player)
+       } else {
