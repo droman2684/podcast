@@ -114,9 +114,20 @@ interface Props {
   onBack: () => void
   onPlay: (episodeId: string) => void
   onOpenSettings: (podcastId: string) => void
+  /** True when rendered as SplitView's detail pane (iPad Library) instead of
+   * its own full-screen route — suppresses the phone-style "‹ Library" back
+   * link, which would be redundant next to the sidebar and (at `rail` width)
+   * SplitView's own back bar. See design_ipad spec §6 "Detail pane". */
+  embedded?: boolean
 }
 
-export default function EpisodeListScreen({ podcast, onBack, onPlay, onOpenSettings }: Props): React.JSX.Element {
+export default function EpisodeListScreen({
+  podcast,
+  onBack,
+  onPlay,
+  onOpenSettings,
+  embedded = false
+}: Props): React.JSX.Element {
   const episodes = useStore((s) => s.episodesByPodcast[podcast.id] ?? [])
   const positions = useStore((s) => s.positions)
   const queue = useStore((s) => s.queue)
@@ -138,20 +149,54 @@ export default function EpisodeListScreen({ podcast, onBack, onPlay, onOpenSetti
     return episodes.filter((e) => !e.played && (positions[e.id] ?? 0) > 0)
   }, [episodes, filter, positions])
 
+  const description = stripHtml(podcast.description)
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, embedded && styles.containerEmbedded]}>
       <View style={styles.header}>
-        <Pressable onPress={onBack}>
-          <Text style={styles.back}>{'‹ Library'}</Text>
-        </Pressable>
-        <View style={styles.titleRow}>
-          <Text style={styles.title} numberOfLines={1}>
-            {podcast.name}
-          </Text>
-          <Pressable hitSlop={10} onPress={() => onOpenSettings(podcast.id)} accessibilityLabel="Podcast settings">
-            <Settings size={18} color={colors.textMuted} />
+        {!embedded && (
+          <Pressable onPress={onBack}>
+            <Text style={styles.back}>{'‹ Library'}</Text>
           </Pressable>
-        </View>
+        )}
+        {embedded ? (
+          // Bigger detail-pane header (spec §6): artwork + title read at a
+          // glance without the phone's cramped single-line row, since the
+          // sidebar already handles "back" — there's no drill-in to undo.
+          <View style={styles.detailHeader}>
+            <Artwork url={podcast.customArtworkUrl ?? podcast.artworkUrl} size={132} radius={radii.card} />
+            <View style={styles.detailHeaderMeta}>
+              <Text style={styles.detailTitle} numberOfLines={2}>
+                {podcast.name}
+              </Text>
+              <Text style={styles.detailAuthor} numberOfLines={1}>
+                {podcast.author}
+              </Text>
+              {description.length > 0 && (
+                <Text style={styles.detailDescription} numberOfLines={3}>
+                  {description}
+                </Text>
+              )}
+              <Pressable
+                style={styles.settingsPill}
+                onPress={() => onOpenSettings(podcast.id)}
+                accessibilityLabel="Podcast settings"
+              >
+                <Settings size={13} color={colors.accent} />
+                <Text style={styles.settingsPillText}>Settings</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : (
+          <View style={styles.titleRow}>
+            <Text style={styles.title} numberOfLines={1}>
+              {podcast.name}
+            </Text>
+            <Pressable hitSlop={10} onPress={() => onOpenSettings(podcast.id)} accessibilityLabel="Podcast settings">
+              <Settings size={18} color={colors.textMuted} />
+            </Pressable>
+          </View>
+        )}
         <View style={styles.filterRow}>
           <Pressable
             style={[styles.filterBtn, filter === 'all' && styles.filterBtnActive]}
@@ -201,10 +246,30 @@ export default function EpisodeListScreen({ podcast, onBack, onPlay, onOpenSetti
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
+  containerEmbedded: { backgroundColor: colors.surface, paddingTop: 28 },
   header: { paddingHorizontal: 20, marginBottom: 12 },
   back: { color: colors.accent, marginBottom: 8, fontSize: 15 },
   titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, flex: 1, marginRight: 12 },
+
+  detailHeader: { flexDirection: 'row', gap: 20, marginBottom: 6 },
+  detailHeaderMeta: { flex: 1, minWidth: 0, justifyContent: 'center', gap: 4 },
+  detailTitle: { fontSize: 26, fontWeight: '700', color: colors.textPrimary },
+  detailAuthor: { fontSize: 13, color: colors.textMuted },
+  detailDescription: { fontSize: 13.5, color: colors.textSecondary, lineHeight: 19, marginTop: 4 },
+  settingsPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: 6,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radii.pill,
+    backgroundColor: colors.accentBg
+  },
+  settingsPillText: { fontSize: 12.5, fontWeight: '600', color: colors.accent },
+
   filterRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
   filterBtn: {
     paddingHorizontal: 12,

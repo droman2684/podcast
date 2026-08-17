@@ -17,6 +17,10 @@ interface Props {
   onOpenAppSettings: () => void
   onManageCategories: () => void
   onRetryPrivateFeed: (feedId: string) => void
+  /** iPad SplitView only — shows the selection ring (spec §6) on whichever
+   * podcast is open in the detail pane. Always null on phone, where there's
+   * no persistent selection to indicate. */
+  selectedPodcastId?: string | null
 }
 
 export default function LibraryScreen({
@@ -24,7 +28,8 @@ export default function LibraryScreen({
   onOpenSettings,
   onOpenAppSettings,
   onManageCategories,
-  onRetryPrivateFeed
+  onRetryPrivateFeed,
+  selectedPodcastId = null
 }: Props): React.JSX.Element {
   const podcasts = useStore((s) => s.podcasts)
   const loading = useStore((s) => s.libraryLoading)
@@ -89,7 +94,7 @@ export default function LibraryScreen({
     const needsPassword = privateFeedsMissingCredential[item.id]
     return (
       <Pressable
-        style={styles.gridCard}
+        style={[styles.gridCard, item.id === selectedPodcastId && styles.gridCardSelected]}
         onPress={() => openPodcast(item)}
         onLongPress={() => confirmUnsubscribe(item)}
         accessibilityLabel={item.name}
@@ -138,7 +143,10 @@ export default function LibraryScreen({
     const needsPassword = privateFeedsMissingCredential[item.id]
     return (
       <SwipeToDelete deleteLabel="Unsubscribe" onDelete={() => unsubscribe(item.id)}>
-        <Pressable style={styles.listRow} onPress={() => openPodcast(item)}>
+        <Pressable
+          style={[styles.listRow, item.id === selectedPodcastId && styles.listRowSelected]}
+          onPress={() => openPodcast(item)}
+        >
           <Artwork url={item.customArtworkUrl ?? item.artworkUrl} size={48} radius={radii.artworkSm} />
           <View style={styles.listMeta}>
             <Text style={styles.listName} numberOfLines={1}>
@@ -305,6 +313,14 @@ const styles = StyleSheet.create({
   gridContent: { paddingHorizontal: SCREEN_PADDING, paddingBottom: 20 },
   gridRow: { gap: GRID_GAP, marginBottom: GRID_GAP },
   gridCard: { flex: 1, maxWidth: `${100 / GRID_COLUMNS}%` },
+  // iPad SplitView selection ring (spec §6's `box-shadow: 0 0 0 2px accent`,
+  // ported to a border since RN has no box-shadow) — replaces the phone's
+  // chevron-and-push affordance with "this is what the detail pane shows".
+  gridCardSelected: {
+    borderWidth: 2,
+    borderColor: colors.accent,
+    borderRadius: radii.artworkSm + 2
+  },
   gridBadge: {
     position: 'absolute',
     top: 6,
@@ -339,6 +355,7 @@ const styles = StyleSheet.create({
     padding: 10,
     ...cardShadow
   },
+  listRowSelected: { borderWidth: 2, borderColor: colors.accent },
   listMeta: { flex: 1, minWidth: 0 },
   listName: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
   listAuthor: { fontSize: 11, color: colors.textMuted, marginTop: 2 },

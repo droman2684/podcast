@@ -18,6 +18,8 @@ import TabBar, { type Tab } from './components/TabBar'
 import Sidebar from './components/Sidebar'
 import AudioEngine from './components/AudioEngine'
 import MiniPlayer from './components/MiniPlayer'
+import PlayerBar from './components/PlayerBar'
+import SplitView from './components/SplitView'
 import { useLayout } from './lib/useLayout'
 import { colors } from './theme'
 
@@ -172,6 +174,7 @@ export default function App(): React.JSX.Element {
           onBrowseLibrary={() => selectTab('library')}
           onBrowseDiscover={() => selectTab('discover')}
           onOpenAppSettings={goToAppSettings}
+          mode={isTablet ? mode : undefined}
         />
       )
     }
@@ -234,7 +237,12 @@ export default function App(): React.JSX.Element {
       : podcasts.find((p) => p.id === route.podcastId)
     screen =
       podcast && episode ? (
-        <PlayerScreen episode={episode} podcast={podcast} onBack={goBackFromPlayer} />
+        <PlayerScreen
+          episode={episode}
+          podcast={podcast}
+          onBack={goBackFromPlayer}
+          mode={isTablet ? mode : undefined}
+        />
       ) : (
         <LibraryScreen
           onSelectPodcast={goToEpisodes}
@@ -247,11 +255,55 @@ export default function App(): React.JSX.Element {
   }
 
   // Hidden on the Player screen itself (route.name === 'player') — showing a
-  // mini bar for the same episode you're already looking at full-screen
-  // would be redundant clutter, not a shortcut.
+  // mini bar/player bar for the same episode you're already looking at
+  // full-screen would be redundant clutter, not a shortcut.
   const showMiniPlayer = currentEpisodeId !== null && route.name !== 'player'
 
   if (isTablet) {
+    // Library is the one destination that becomes a real SplitView (spec
+    // §3/§7) rather than just taking a `mode` prop like Queue/Player above
+    // — on phone, selecting a show pushes a whole new screen (route.name
+    // becomes 'episodes'); on tablet that same route instead selects which
+    // show the detail pane shows, with the picker staying visible in the
+    // list pane. Everything else screen already handles correctly via the
+    // `mode` prop threaded above, so only this one case needs overriding.
+    const showLibrarySplit = route.name === 'episodes' || (route.name === 'tabs' && tab === 'library')
+    let tabletScreen = screen
+    if (showLibrarySplit) {
+      const selectedPodcastId = route.name === 'episodes' ? route.podcastId : null
+      const selectedPodcast = selectedPodcastId ? (podcasts.find((p) => p.id === selectedPodcastId) ?? null) : null
+      tabletScreen = (
+        <SplitView
+          mode={mode}
+          hasSelection={selectedPodcast !== null}
+          onBack={goToTabs}
+          backLabel="Library"
+          emptyDetailLabel="Select a show to see its episodes."
+          list={
+            <LibraryScreen
+              onSelectPodcast={goToEpisodes}
+              onOpenSettings={openSettings}
+              onOpenAppSettings={goToAppSettings}
+              onManageCategories={goToCategories}
+              onRetryPrivateFeed={goToRetryPrivateFeed}
+              selectedPodcastId={selectedPodcastId}
+            />
+          }
+          detail={
+            selectedPodcast ? (
+              <EpisodeListScreen
+                podcast={selectedPodcast}
+                onBack={goToTabs}
+                onPlay={(episodeId) => openPlayer(selectedPodcast.id, episodeId)}
+                onOpenSettings={openSettings}
+                embedded
+              />
+            ) : null
+          }
+        />
+      )
+    }
+
     return (
       <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.bg }}>
         <AudioEngine />
@@ -263,11 +315,9 @@ export default function App(): React.JSX.Element {
           onOpenPlayer={openPlayer}
           currentEpisodeId={currentEpisodeId}
         />
-        {/* Drill-in still pushes within this column for now; the list/detail
-            split lands with SplitView (spec §3). */}
         <View style={{ flex: 1 }}>
-          <View style={{ flex: 1 }}>{screen}</View>
-          {showMiniPlayer && <MiniPlayer onOpen={openPlayer} />}
+          <View style={{ flex: 1 }}>{tabletScreen}</View>
+          {showMiniPlayer && <PlayerBar onOpen={openPlayer} />}
         </View>
         <StatusBar style="auto" />
       </View>

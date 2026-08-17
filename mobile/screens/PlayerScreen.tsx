@@ -1,13 +1,16 @@
-import { useRef, useState } from 'react'
-import { View, Text, Pressable, ScrollView, PanResponder, StyleSheet, type LayoutChangeEvent } from 'react-native'
+import { useMemo } from 'react'
+import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
+import { ChevronDown } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import { stripHtml } from '../lib/stripHtml'
+import { useScrubBar } from '../lib/useScrubBar'
+import { buildEpisodeIndex } from '../lib/episodeIndex'
 import { colors, radii } from '../theme'
+import type { LayoutMode } from '../lib/useLayout'
 
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2]
-const THUMB_SIZE = 16
 
 function nextSpeed(current: number): number {
   const idx = SPEEDS.indexOf(current)
@@ -25,12 +28,15 @@ interface Props {
   episode: Episode
   podcast: Podcast
   onBack: () => void
+  /** Omit (or 'compact') for the phone full-screen layout. 'rail'/'regular'
+   * render this as the iPad Now Playing pane instead — see spec §6/§7. */
+  mode?: LayoutMode
 }
 
 // A thin view onto the global AudioEngine (components/AudioEngine.tsx) —
 // this screen no longer owns a player instance, so navigating away doesn't
 // stop playback and Home/Queue see the same live state.
-export default function PlayerScreen({ episode, podcast, onBack }: Props): React.JSX.Element {
+export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact' }: Props): React.JSX.Element {
   const playing = useStore((s) => s.playing)
   const currentTimeSec = useStore((s) => s.currentTimeSec)
   const duration = useStore((s) => s.duration)
@@ -40,50 +46,149 @@ export default function PlayerScreen({ episode, podcast, onBack }: Props): React
   const togglePlay = useStore((s) => s.togglePlay)
   const requestSeek = useStore((s) => s.requestSeek)
   const setPlaybackRate = useStore((s) => s.setPlaybackRate)
-  const [barWidth, setBarWidth] = useState(0)
-  // null when not actively dragging the seek thumb; a 0-1 ratio while dragging,
-  // so the bar tracks the finger instead of the (stale, until seek completes)
-  // playback position.
-  const [scrubRatio, setScrubRatio] = useState<number | null>(null)
+  const queue = useStore((s) => s.queue)
+  const podcasts = useStore((s) => s.podcasts)
+  const episodesByPodcast = useStore((s) => s.episodesByPodcast)
+  const loadEpisode = useStore((s) => s.loadEpisode)
 
-  // PanResponder is created once via useRef — its callbacks close over whatever
-  // barWidth/duration were at creation time, so live values are read through
-  // refs instead (same pattern as DraggableList.tsx's latestRef).
-  const barWidthRef = useRef(barWidth)
-  barWidthRef.current = barWidth
-  const durationRef = useRef(duration)
-  durationRef.current = duration
-  const dragStartXRef = useRef(0)
+  const { onBarLayout, panHandlers, progress, displayedTimeSec, scrubbing } = useScrubBar({
+    duration,
+    currentTimeSec,
+    onSeek: requestSeek
+  })
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (evt) => {
-        dragStartXRef.current = evt.nativeEvent.locationX
-        const width = barWidthRef.current
-        const ratio = width > 0 ? Math.min(1, Math.max(0, evt.nativeEvent.locationX / width)) : 0
-        setScrubRatio(ratio)
-      },
-      onPanResponderMove: (_evt, gesture) => {
-        const width = barWidthRef.current
-        if (width <= 0) return
-        const x = dragStartXRef.current + gesture.dx
-        setScrubRatio(Math.min(1, Math.max(0, x / width)))
-      },
-      onPanResponderRelease: () => {
-        setScrubRatio((ratio) => {
-          if (ratio !== null && durationRef.current > 0) requestSeek(ratio * durationRef.current)
-          return null
-        })
-      },
-      onPanResponderTerminate: () => setScrubRatio(null)
-    })
-  ).current
-
-  const progress = scrubRatio !== null ? scrubRatio : duration > 0 ? currentTimeSec / duration : 0
-  const displayedTimeSec = scrubRatio !== null ? scrubRatio * duration : currentTimeSec
   const description = stripHtml(episode.description)
+  const isTablet = mode !== 'compact'
+
+  // Up next in the queue, current episode excluded — it stays playing at
+  // the top of the actual Queue tab, but repeating it here would read as
+  // "play this again" right under the transport controls for it.
+  const episodeIndex = useMemo(() => buildEpisodeIndex(episodesByPodcast), [episodesByPodcast])
+  const podcastById = useMemo(() => new Map(podcasts.map((p) => [p.id, p])), [podcasts])
+  const upNext = useMemo(
+    () =>
+      queue
+        .filter((id) => id !== episode.id)
+        .map((id) => episodeIndex.get(id))
+        .filter((e): e is Episode => e !== undefined),
+    [queue, episode.id, episodeIndex]
+  )
+
+  const controls = (
+    <View style={isTablet ? styles.controlsTablet : styles.controls}>
+      <Pressable onPress={() => requestSeek(Math.max(0, currentTimeSec - skipBackSec))}>
+        <Text style={styles.skipBtn}>-{skipBackSec}s</Text>
+      </Pressable>
+      <Pressable
+        style={[styles.playButton, isTablet && styles.playButtonTablet]}
+        onPress={togglePlay}
+        accessibilityLabel={playing ? 'Pause' : 'Play'}
+      >
+        <Text style={styles.playButtonText}>{playing ? 'Pause' : 'Play'}</Text>
+      </Pressable>
+      <Pressable onPress={() => requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))}>
+        <Text style={styles.skipBtn}>+{skipForwardSec}s</Text>
+      </Pressable>
+    </View>
+  )
+
+  const scrubber = (
+    <>
+      <View style={styles.barTouchArea} onLayout={onBarLayout} {...panHandlers}>
+        <View style={styles.bar}>
+          <View style={[styles.barFill, { width: `${progress * 100}%` }]} />
+        </View>
+        <View style={[styles.thumb, { left: `${progress * 100}%` }, scrubbing && styles.thumbActive]} />
+      </View>
+      <View style={styles.timeRow}>
+        <Text style={styles.timeText}>{formatTime(displayedTimeSec)}</Text>
+        <Text style={styles.timeText}>{formatTime(duration)}</Text>
+      </View>
+    </>
+  )
+
+  const speedPill = (
+    <Pressable style={styles.speedBtn} onPress={() => setPlaybackRate(nextSpeed(playbackRate))}>
+      <Text style={styles.speedText}>{playbackRate}x</Text>
+    </Pressable>
+  )
+
+  if (isTablet) {
+    // Not a modal — it takes over the content area while the sidebar stays
+    // visible (App.tsx renders Sidebar as a sibling, unaffected by this
+    // route). Left column mirrors the phone layout at a larger scale; the
+    // right rail (regular width only — hidden at rail/portrait per spec §6)
+    // adds Up Next and full episode notes since there's room for them.
+    return (
+      <View style={styles.tabletContainer}>
+        <Pressable style={styles.collapseBar} onPress={onBack} hitSlop={8}>
+          <ChevronDown size={18} color={colors.textMuted} />
+          <Text style={styles.collapseText}>Now Playing</Text>
+        </Pressable>
+        <View style={styles.tabletBody}>
+          <ScrollView
+            style={styles.tabletLeft}
+            contentContainerStyle={styles.tabletLeftContent}
+            showsVerticalScrollIndicator={false}
+          >
+            <Artwork url={episode.artworkUrl ?? podcast.artworkUrl} size={288} radius={radii.card} />
+            <Text style={styles.podcastNameTablet}>{podcast.name}</Text>
+            <Text style={styles.titleTablet} numberOfLines={3}>
+              {episode.title}
+            </Text>
+            {scrubber}
+            {controls}
+            {speedPill}
+            {mode === 'rail' && description.length > 0 && (
+              <View style={styles.descriptionSection}>
+                <Text style={styles.sectionTitle}>Episode Description</Text>
+                <Text style={styles.description}>{description}</Text>
+              </View>
+            )}
+          </ScrollView>
+          {mode === 'regular' && (
+            <ScrollView style={styles.tabletRight} contentContainerStyle={{ paddingBottom: 24 }}>
+              {upNext.length > 0 && (
+                <View style={styles.rightSection}>
+                  <Text style={styles.sectionTitle}>Up Next</Text>
+                  {upNext.map((item) => {
+                    const itemPodcast = podcastById.get(item.podcastId)
+                    return (
+                      <Pressable
+                        key={item.id}
+                        style={styles.queueRow}
+                        onPress={() => loadEpisode(item.id, { autoplay: true })}
+                      >
+                        <Artwork
+                          url={item.artworkUrl ?? itemPodcast?.artworkUrl ?? null}
+                          size={40}
+                          radius={radii.artworkSm}
+                        />
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <Text style={styles.queueTitle} numberOfLines={1}>
+                            {item.title}
+                          </Text>
+                          <Text style={styles.queueSub} numberOfLines={1}>
+                            {itemPodcast?.name}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    )
+                  })}
+                </View>
+              )}
+              {description.length > 0 && (
+                <View style={styles.rightSection}>
+                  <Text style={styles.sectionTitle}>Episode Description</Text>
+                  <Text style={styles.description}>{description}</Text>
+                </View>
+              )}
+            </ScrollView>
+          )}
+        </View>
+      </View>
+    )
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -100,42 +205,9 @@ export default function PlayerScreen({ episode, podcast, onBack }: Props): React
         {episode.title}
       </Text>
 
-      <View
-        style={styles.barTouchArea}
-        onLayout={(e: LayoutChangeEvent) => setBarWidth(e.nativeEvent.layout.width)}
-        {...panResponder.panHandlers}
-      >
-        <View style={styles.bar}>
-          <View style={[styles.barFill, { width: `${progress * 100}%` }]} />
-        </View>
-        <View
-          style={[
-            styles.thumb,
-            { left: `${progress * 100}%` },
-            scrubRatio !== null && styles.thumbActive
-          ]}
-        />
-      </View>
-      <View style={styles.timeRow}>
-        <Text style={styles.timeText}>{formatTime(displayedTimeSec)}</Text>
-        <Text style={styles.timeText}>{formatTime(duration)}</Text>
-      </View>
-
-      <View style={styles.controls}>
-        <Pressable onPress={() => requestSeek(Math.max(0, currentTimeSec - skipBackSec))}>
-          <Text style={styles.skipBtn}>-{skipBackSec}s</Text>
-        </Pressable>
-        <Pressable style={styles.playButton} onPress={togglePlay}>
-          <Text style={styles.playButtonText}>{playing ? 'Pause' : 'Play'}</Text>
-        </Pressable>
-        <Pressable onPress={() => requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))}>
-          <Text style={styles.skipBtn}>+{skipForwardSec}s</Text>
-        </Pressable>
-      </View>
-
-      <Pressable style={styles.speedBtn} onPress={() => setPlaybackRate(nextSpeed(playbackRate))}>
-        <Text style={styles.speedText}>{playbackRate}x</Text>
-      </Pressable>
+      {scrubber}
+      {controls}
+      {speedPill}
 
       {description.length > 0 && (
         <View style={styles.descriptionSection}>
@@ -168,11 +240,11 @@ const styles = StyleSheet.create({
   barFill: { height: '100%', backgroundColor: colors.accent },
   thumb: {
     position: 'absolute',
-    width: THUMB_SIZE,
-    height: THUMB_SIZE,
-    borderRadius: THUMB_SIZE / 2,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
     backgroundColor: colors.accent,
-    marginLeft: -THUMB_SIZE / 2,
+    marginLeft: -8,
     borderWidth: 2,
     borderColor: '#fff'
   },
@@ -212,5 +284,48 @@ const styles = StyleSheet.create({
     letterSpacing: 0.7,
     marginBottom: 8
   },
-  description: { fontSize: 13, color: colors.textSecondary, lineHeight: 19 }
+  description: { fontSize: 13, color: colors.textSecondary, lineHeight: 19 },
+
+  // iPad Now Playing pane — spec §6.
+  tabletContainer: { flex: 1, backgroundColor: colors.surface },
+  collapseBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 12
+  },
+  collapseText: { fontSize: 13, fontWeight: '600', color: colors.textMuted },
+  tabletBody: { flex: 1, flexDirection: 'row' },
+  tabletLeft: { flex: 1 },
+  tabletLeftContent: { alignItems: 'center', paddingHorizontal: 32, paddingBottom: 40 },
+  tabletRight: {
+    width: 372,
+    borderLeftWidth: StyleSheet.hairlineWidth,
+    borderLeftColor: colors.border,
+    padding: 24
+  },
+  podcastNameTablet: { fontSize: 14, color: colors.textMuted, marginTop: 20, textAlign: 'center' },
+  titleTablet: {
+    fontSize: 22,
+    fontWeight: '700',
+    marginTop: 6,
+    marginBottom: 24,
+    textAlign: 'center',
+    color: colors.textPrimary,
+    maxWidth: 460
+  },
+  controlsTablet: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 28,
+    marginBottom: 20
+  },
+  playButtonTablet: { width: 88, height: 88, borderRadius: 44 },
+  rightSection: { marginBottom: 28 },
+  queueRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 },
+  queueTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
+  queueSub: { fontSize: 11.5, color: colors.textMuted, marginTop: 1 }
 })

@@ -18,8 +18,10 @@ import { groupByPodcast } from '@shared/queueView'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import SwipeToDelete from '../components/SwipeToDelete'
+import SplitView from '../components/SplitView'
 import { stripHtml } from '../lib/stripHtml'
 import { colors, radii, cardShadow } from '../theme'
+import type { LayoutMode } from '../lib/useLayout'
 
 interface QueueItem {
   podcast: Podcast
@@ -31,6 +33,11 @@ interface Props {
   onBrowseLibrary: () => void
   onBrowseDiscover: () => void
   onOpenAppSettings: () => void
+  /** Omit (or 'compact') for the phone layout — episode details open in a
+   * bottom-sheet Modal. 'rail'/'regular' switch to SplitView instead, per
+   * spec §7 "Queue... Detail pane replaces the bottom-sheet modal with
+   * episode notes". */
+  mode?: LayoutMode
 }
 
 const ROW_HEIGHT = 76
@@ -47,8 +54,10 @@ export default function QueueScreen({
   onPlay,
   onBrowseLibrary,
   onBrowseDiscover,
-  onOpenAppSettings
+  onOpenAppSettings,
+  mode = 'compact'
 }: Props): React.JSX.Element {
+  const isTablet = mode !== 'compact'
   const queue = useStore((s) => s.queue)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
@@ -126,8 +135,9 @@ export default function QueueScreen({
     // jumping every 5 seconds.
     const positionSec = isCurrent ? currentTimeSec : (positions[item.episode.id] ?? 0)
     const progress = item.episode.durationSec > 0 ? Math.min(1, positionSec / item.episode.durationSec) : 0
+    const selected = isTablet && detailItem?.episode.id === item.episode.id
     return (
-      <View style={styles.row}>
+      <View style={[styles.row, selected && styles.rowSelected]}>
         {position && (
           <View style={styles.moveControls}>
             <Pressable
@@ -211,6 +221,98 @@ export default function QueueScreen({
     )
   }
 
+  const listBody =
+    items.length === 0 ? (
+      <EmptyQueueState
+        libraryLoading={libraryLoading}
+        libraryLoaded={libraryLoaded}
+        hasSubscriptions={podcasts.length > 0}
+        onBrowseLibrary={onBrowseLibrary}
+        onBrowseDiscover={onBrowseDiscover}
+      />
+    ) : grouped ? (
+      <ScrollView contentContainerStyle={styles.listContent}>
+        {groupByPodcast(items.map((i) => i.episode)).map((group) => {
+          const podcast = podcastById.get(group.podcastId)
+          if (!podcast) return null
+          return (
+            <View key={group.podcastId} style={styles.group}>
+              <Text style={styles.groupHeader}>{podcast.name}</Text>
+              {group.episodes.map((episode) => (
+                <SwipeToDelete key={episode.id} deleteLabel="Remove" onDelete={() => removeFromQueue(episode.id)}>
+                  {renderRow({ podcast, episode })}
+                </SwipeToDelete>
+              ))}
+            </View>
+          )
+        })}
+      </ScrollView>
+    ) : (
+      <ScrollView contentContainerStyle={styles.listContent}>
+        {items.map((item, index) => (
+          <SwipeToDelete key={item.episode.id} deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
+            {renderRow(item, { index, total: items.length })}
+          </SwipeToDelete>
+        ))}
+      </ScrollView>
+    )
+
+  // Shared between the phone's bottom-sheet Modal and the iPad detail pane
+  // (spec §7) — same content either way, just different chrome around it.
+  // `showClose` is false at `regular` width, where there's nothing to
+  // return to but the empty-detail placeholder, same as EpisodeListScreen's
+  // embedded detail pane never needing its own back link.
+  const renderDetailContent = (item: QueueItem, showClose: boolean): React.JSX.Element => (
+    <>
+      <View style={styles.modalHeader}>
+        <Artwork url={item.episode.artworkUrl ?? item.podcast.artworkUrl} size={48} radius={radii.artworkSm} />
+        <View style={{ flex: 1 }}>
+          <Text style={styles.epTitle} numberOfLines={2}>
+            {item.episode.title}
+          </Text>
+          <Text style={styles.podcastName}>{item.podcast.name}</Text>
+        </View>
+        {showClose && (
+          <Pressable hitSlop={10} onPress={() => setDetailItem(null)} accessibilityLabel="Close">
+            <X size={18} color={colors.textMuted} />
+          </Pressable>
+        )}
+      </View>
+      <ScrollView style={styles.modalBody}>
+        <Text style={styles.modalDescription}>
+          {stripHtml(item.episode.description) || 'No description available.'}
+        </Text>
+      </ScrollView>
+      {/* Move-to-top/bottom only makes sense for the plain manual order —
+          grouped-by-show view is browse/remove only, same as arrows never
+          showing there either. */}
+      {!grouped && (
+        <View style={styles.modalMoveRow}>
+          <Pressable
+            style={styles.modalMoveBtn}
+            onPress={() => {
+              moveToTop(item.episode.id)
+              setDetailItem(null)
+            }}
+          >
+            <ChevronsUp size={15} color={colors.accent} />
+            <Text style={styles.modalMoveBtnText}>Move to Top</Text>
+          </Pressable>
+          <Pressable
+            style={styles.modalMoveBtn}
+            onPress={() => {
+              moveToBottom(item.episode.id)
+              setDetailItem(null)
+            }}
+          >
+            <ChevronsDown size={15} color={colors.accent} />
+            <Text style={styles.modalMoveBtnText}>Move to Bottom</Text>
+          </Pressable>
+        </View>
+      )}
+    </>
+  )
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -230,108 +332,33 @@ export default function QueueScreen({
         </Pressable>
       </View>
 
-      {items.length === 0 ? (
-        <EmptyQueueState
-          libraryLoading={libraryLoading}
-          libraryLoaded={libraryLoaded}
-          hasSubscriptions={podcasts.length > 0}
-          onBrowseLibrary={onBrowseLibrary}
-          onBrowseDiscover={onBrowseDiscover}
+      {isTablet ? (
+        <SplitView
+          mode={mode}
+          hasSelection={detailItem !== null}
+          onBack={() => setDetailItem(null)}
+          backLabel="Queue"
+          emptyDetailLabel="Select an episode to see its notes."
+          list={listBody}
+          detail={detailItem ? <View style={styles.detailPaneContent}>{renderDetailContent(detailItem, mode === 'regular')}</View> : null}
         />
-      ) : grouped ? (
-        <ScrollView contentContainerStyle={styles.listContent}>
-          {groupByPodcast(items.map((i) => i.episode)).map((group) => {
-            const podcast = podcastById.get(group.podcastId)
-            if (!podcast) return null
-            return (
-              <View key={group.podcastId} style={styles.group}>
-                <Text style={styles.groupHeader}>{podcast.name}</Text>
-                {group.episodes.map((episode) => (
-                  <SwipeToDelete
-                    key={episode.id}
-                    deleteLabel="Remove"
-                    onDelete={() => removeFromQueue(episode.id)}
-                  >
-                    {renderRow({ podcast, episode })}
-                  </SwipeToDelete>
-                ))}
-              </View>
-            )
-          })}
-        </ScrollView>
       ) : (
-        <ScrollView contentContainerStyle={styles.listContent}>
-          {items.map((item, index) => (
-            <SwipeToDelete key={item.episode.id} deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
-              {renderRow(item, { index, total: items.length })}
-            </SwipeToDelete>
-          ))}
-        </ScrollView>
+        <>
+          {listBody}
+          <Modal
+            visible={detailItem !== null}
+            animationType="slide"
+            transparent
+            onRequestClose={() => setDetailItem(null)}
+          >
+            <Pressable style={styles.modalBackdrop} onPress={() => setDetailItem(null)}>
+              <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+                {detailItem && renderDetailContent(detailItem, true)}
+              </Pressable>
+            </Pressable>
+          </Modal>
+        </>
       )}
-
-      <Modal
-        visible={detailItem !== null}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setDetailItem(null)}
-      >
-        <Pressable style={styles.modalBackdrop} onPress={() => setDetailItem(null)}>
-          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
-            {detailItem && (
-              <>
-                <View style={styles.modalHeader}>
-                  <Artwork
-                    url={detailItem.episode.artworkUrl ?? detailItem.podcast.artworkUrl}
-                    size={48}
-                    radius={radii.artworkSm}
-                  />
-                  <View style={{ flex: 1 }}>
-                    <Text style={styles.epTitle} numberOfLines={2}>
-                      {detailItem.episode.title}
-                    </Text>
-                    <Text style={styles.podcastName}>{detailItem.podcast.name}</Text>
-                  </View>
-                  <Pressable hitSlop={10} onPress={() => setDetailItem(null)} accessibilityLabel="Close">
-                    <X size={18} color={colors.textMuted} />
-                  </Pressable>
-                </View>
-                <ScrollView style={styles.modalBody}>
-                  <Text style={styles.modalDescription}>
-                    {stripHtml(detailItem.episode.description) || 'No description available.'}
-                  </Text>
-                </ScrollView>
-                {/* Move-to-top/bottom only makes sense for the plain manual
-                    order — grouped-by-show view is browse/remove only, same
-                    as arrows never showing there either. */}
-                {!grouped && (
-                  <View style={styles.modalMoveRow}>
-                    <Pressable
-                      style={styles.modalMoveBtn}
-                      onPress={() => {
-                        moveToTop(detailItem.episode.id)
-                        setDetailItem(null)
-                      }}
-                    >
-                      <ChevronsUp size={15} color={colors.accent} />
-                      <Text style={styles.modalMoveBtnText}>Move to Top</Text>
-                    </Pressable>
-                    <Pressable
-                      style={styles.modalMoveBtn}
-                      onPress={() => {
-                        moveToBottom(detailItem.episode.id)
-                        setDetailItem(null)
-                      }}
-                    >
-                      <ChevronsDown size={15} color={colors.accent} />
-                      <Text style={styles.modalMoveBtnText}>Move to Bottom</Text>
-                    </Pressable>
-                  </View>
-                )}
-              </>
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
     </View>
   )
 }
@@ -433,6 +460,9 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     ...cardShadow
   },
+  // iPad SplitView selection ring (spec §6) — see LibraryScreen's
+  // gridCardSelected/listRowSelected for the same pattern.
+  rowSelected: { borderWidth: 2, borderColor: colors.accent },
   moveControls: { alignItems: 'center', gap: 2 },
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   epTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
@@ -469,7 +499,7 @@ const styles = StyleSheet.create({
     padding: 20
   },
   modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
-  modalBody: { marginTop: 4 },
+  modalBody: { flex: 1, marginTop: 4 },
   modalDescription: { fontSize: 13, color: colors.textSecondary, lineHeight: 19, paddingBottom: 20 },
   modalMoveRow: { flexDirection: 'row', gap: 10, paddingBottom: 10 },
   modalMoveBtn: {
@@ -482,5 +512,6 @@ const styles = StyleSheet.create({
     borderRadius: radii.item,
     backgroundColor: colors.accentBg
   },
-  modalMoveBtnText: { color: colors.accent, fontWeight: '600', fontSize: 13 }
+  modalMoveBtnText: { color: colors.accent, fontWeight: '600', fontSize: 13 },
+  detailPaneContent: { flex: 1, padding: 24 }
 })
