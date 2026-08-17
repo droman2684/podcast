@@ -101,6 +101,83 @@ async function saveLastSeenMap(map: Record<string, string>): Promise<void> {
   }
 }
 
+// Mirrors the desktop app's syncUpdatedAt/isRemoteNewer ledger
+// (src/main/sync/sync.ts) — mobile previously had no equivalent, so every
+// pull (loadLibrary, refreshPositions, fetchLatestPosition) blindly trusted
+// whatever the server returned, even a row older than an edit this device
+// already made but hadn't finished uploading. That's what let a quick
+// background/foreground cycle silently roll back a just-made position/queue/
+// played-state change: the edit landed locally, the app foregrounded before
+// the upload finished, and the resulting fetch overwrote it with the
+// stale pre-edit server row. Keyed the same way as desktop
+// ('playbackPosition:<id>', 'episodePlayed:<id>', 'queue') so the concept —
+// "don't accept a remote row unless it's actually newer than what this
+// device already knows" — matches exactly, just persisted to AsyncStorage
+// instead of the main process's disk-backed snapshot.
+const SYNC_LEDGER_STORAGE_KEY = 'empirepod.syncLedger.v1'
+let syncLedger: Record<string, number> = {}
+// A promise, not a boolean: a plain "already loaded" flag set synchronously
+// before the AsyncStorage read completes would let a second concurrent
+// caller see it as already-loaded and start comparing against the still-
+// empty `syncLedger` while the first call's read is still in flight. Every
+// caller awaiting the same promise ensures nobody proceeds until the read
+// actually finishes, no matter how many call this before the first resolves.
+let syncLedgerLoadPromise: Promise<void> | null = null
+
+function ensureSyncLedgerLoaded(): Promise<void> {
+  if (syncLedgerLoadPromise) return syncLedgerLoadPromise
+  syncLedgerLoadPromise = (async () => {
+    try {
+      const raw = await AsyncStorage.getItem(SYNC_LEDGER_STORAGE_KEY)
+      // Merged rather than replaced: in the unlikely case a touchSync fires
+      // before this read resolves, a plain overwrite here would silently
+      // discard it. Keys already in `syncLedger` (from such a touch) win
+      // over the loaded snapshot, since they're strictly newer.
+      if (raw) syncLedger = { ...(JSON.parse(raw) as Record<string, number>), ...syncLedger }
+    } catch (err) {
+      console.error('[sync] ledger load failed:', err)
+    }
+  })()
+  return syncLedgerLoadPromise
+}
+
+// Stamped at the moment of a local edit (default `Date.now()`), independent
+// of whether the matching network write actually succeeds — an edit this
+// device just made is authoritative from this device's point of view
+// whether or not it's reached the server yet, and should resist being
+// overwritten by a pull that only reflects the pre-edit state. Also called
+// with a remote row's own `updated_at` when a pull is accepted, so the next
+// comparison has an up-to-date baseline.
+function touchSync(key: string, ms: number = Date.now()): void {
+  syncLedger[key] = ms
+  AsyncStorage.setItem(SYNC_LEDGER_STORAGE_KEY, JSON.stringify(syncLedger)).catch((err) => {
+    console.error('[sync] ledger save failed:', err)
+  })
+}
+
+// Undoes a touchSync when the write it was protecting turned out to fail —
+// otherwise a permanently-failed upload would leave the ledger claiming
+// "this device knows about an edit as of just now" forever, which could
+// block a genuinely newer value from a different device that legitimately
+// won the same window from ever being accepted.
+function revertSync(key: string, previousMs: number | undefined): void {
+  if (previousMs === undefined) delete syncLedger[key]
+  else syncLedger[key] = previousMs
+  AsyncStorage.setItem(SYNC_LEDGER_STORAGE_KEY, JSON.stringify(syncLedger)).catch((err) => {
+    console.error('[sync] ledger save failed:', err)
+  })
+}
+
+function isRemoteNewer(key: string, remoteUpdatedAtIso: string | null | undefined): boolean {
+  if (!remoteUpdatedAtIso) return true
+  const remoteMs = new Date(remoteUpdatedAtIso).getTime()
+  return remoteMs > (syncLedger[key] ?? 0)
+}
+
+// Tracks an in-flight refreshPositions() call so rapid background/foreground
+// toggling coalesces into the same fetch instead of firing overlapping ones.
+let refreshPositionsInFlight: Promise<void> | null = null
+
 interface PodcastRow {
   id: string
   feed_url: string
@@ -257,6 +334,13 @@ interface AppState {
 }
 
 async function saveQueue(episodeIds: string[]): Promise<void> {
+  await ensureSyncLedgerLoaded()
+  // Stamped before the network call even starts (see touchSync's doc
+  // comment) — every caller sets `queue` locally right before calling this,
+  // so this covers addToQueue/removeFromQueue/reorderQueue/loadLibrary's
+  // auto-queue in one place.
+  const previousLedgerMs = syncLedger.queue
+  touchSync('queue')
   const userId = await currentUserId()
   if (!userId) return
   try {
@@ -270,6 +354,7 @@ async function saveQueue(episodeIds: string[]): Promise<void> {
     console.log(`[queue] saved order: ${episodeIds.length} episode(s)`)
   } catch (err) {
     console.error('[queue] save failed:', err)
+    revertSync('queue', previousLedgerMs)
     throw err
   }
 }
@@ -521,6 +606,7 @@ export const useStore = create<AppState>((set, get) => ({
   loadLibrary: async () => {
     set({ libraryLoading: true, libraryError: null })
     try {
+      await ensureSyncLedgerLoaded()
       const userId = await currentUserId()
       if (!userId) throw new Error('Not signed in')
 
@@ -536,14 +622,14 @@ export const useStore = create<AppState>((set, get) => ({
             .is('deleted_at', null)
             .range(from, to)
         ),
-        fetchAllRows<{ episode_id: string; position_sec: number }>((from, to) =>
+        fetchAllRows<{ episode_id: string; position_sec: number; updated_at: string }>((from, to) =>
           supabase
             .from('playback_positions')
             .select('*', { count: 'exact' })
             .eq('user_id', userId)
             .range(from, to)
         ),
-        fetchAllRows<{ episode_id: string; played: boolean }>((from, to) =>
+        fetchAllRows<{ episode_id: string; played: boolean; updated_at: string }>((from, to) =>
           supabase
             .from('episode_played')
             .select('*', { count: 'exact' })
@@ -574,10 +660,23 @@ export const useStore = create<AppState>((set, get) => ({
         privateFeeds[row.id] = { id: row.id, name: row.name, url: row.url, user: row.feed_user }
       }
 
+      // Per-key gated by the sync ledger (see isRemoteNewer's doc comment):
+      // a server row only overwrites what this device already knows if it's
+      // actually newer than the last edit/pull this device recorded for
+      // that key. A row that fails the gate is simply left out of these
+      // objects, so the merges below fall through to whatever's already in
+      // state — a position/queue edit this device made but hasn't finished
+      // uploading yet survives instead of being silently rolled back by a
+      // fetch that only reflects the pre-edit state.
       const positions: Record<string, number> = {}
-      for (const row of positionRows) positions[row.episode_id] = row.position_sec
+      for (const row of positionRows) {
+        const key = `playbackPosition:${row.episode_id}`
+        if (!isRemoteNewer(key, row.updated_at)) continue
+        positions[row.episode_id] = row.position_sec
+        touchSync(key, new Date(row.updated_at).getTime())
+      }
 
-      const playedByEpisode = new Map<string, boolean>(playedRows.map((r) => [r.episode_id, r.played]))
+      const playedRowByEpisode = new Map(playedRows.map((r) => [r.episode_id, r]))
       console.log(
         `[loadLibrary] ${playedRows.length} episode_played row(s), ${playedRows.filter((r) => r.played).length} marked played`
       )
@@ -586,18 +685,24 @@ export const useStore = create<AppState>((set, get) => ({
       for (const row of settingsRows) podcastSettings[row.podcast_id] = { notify: row.notify }
 
       const queueRow = unwrap(queueResult)
-      const queue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
+      const acceptQueue = isRemoteNewer('queue', queueRow?.updated_at)
+      const remoteQueue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
+      if (acceptQueue && queueRow?.updated_at) touchSync('queue', new Date(queueRow.updated_at).getTime())
 
       // Local cache first, remote second: remote wins for any episode it
-      // has a row for (it's authoritative once synced), but a position
-      // saved locally on this device that hasn't reached the server yet
-      // (offline, or just not pushed at the moment the app closed) must
-      // survive this merge rather than being wiped out by a fetch that
-      // simply doesn't know about it yet.
+      // has a newer row for, but a position saved locally on this device
+      // that hasn't reached the server yet (offline, or just not pushed at
+      // the moment the app closed) must survive this merge rather than
+      // being wiped out by a fetch that only reflects the pre-edit state.
       set((state) => {
         const merged = { ...state.positions, ...positions }
         saveLocalPositions(merged).catch(() => {})
-        return { positions: merged, podcastSettings, queue, privateFeeds }
+        return {
+          positions: merged,
+          podcastSettings,
+          queue: acceptQueue ? remoteQueue : state.queue,
+          privateFeeds
+        }
       })
 
       const allRows = podcastRows ?? []
@@ -661,10 +766,23 @@ export const useStore = create<AppState>((set, get) => ({
 
           try {
             const parsed = await parseFeed(row.feed_url, row.id, authHeader)
-            const episodes = parsed.episodes.map((e) => ({
-              ...e,
-              played: playedByEpisode.get(e.id) ?? false
-            }))
+            // Same gate as positions/queue above: only take the server's
+            // played value if it's newer than what this device already
+            // recorded, otherwise keep this device's own in-memory value
+            // (an optimistic setPlayed that hasn't finished uploading
+            // shouldn't get reverted by this reload).
+            const previousPlayedById = new Map(
+              (get().episodesByPodcast[row.id] ?? []).map((e) => [e.id, e.played])
+            )
+            const episodes = parsed.episodes.map((e) => {
+              const playedRow = playedRowByEpisode.get(e.id)
+              const key = `episodePlayed:${e.id}`
+              if (playedRow && isRemoteNewer(key, playedRow.updated_at)) {
+                touchSync(key, new Date(playedRow.updated_at).getTime())
+                return { ...e, played: playedRow.played }
+              }
+              return { ...e, played: previousPlayedById.get(e.id) ?? playedRow?.played ?? false }
+            })
             const podcast: Podcast = {
               id: row.id,
               feedUrl: row.feed_url,
@@ -894,6 +1012,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   savePosition: async (episodeId, positionSec) => {
+    await ensureSyncLedgerLoaded()
     const next = { ...get().positions, [episodeId]: positionSec }
     set({ positions: next })
     // Written to disk immediately and independently of the network call
@@ -901,6 +1020,11 @@ export const useStore = create<AppState>((set, get) => ({
     // correctly even if the Supabase write below is slow, fails, or never
     // gets the chance to run before the app is killed.
     saveLocalPositions(next).catch(() => {})
+    // Stamped now, before the network call even starts — see touchSync's
+    // doc comment. Protects this edit from being rolled back by a
+    // loadLibrary/refreshPositions fetch that lands before the upload below
+    // finishes (e.g. this device backgrounding right after a save).
+    touchSync(`playbackPosition:${episodeId}`)
     const userId = await currentUserId()
     if (!userId) return
     try {
@@ -922,18 +1046,28 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   fetchLatestPosition: async (episodeId) => {
+    await ensureSyncLedgerLoaded()
     const userId = await currentUserId()
     if (!userId) return null
     try {
       const { data, error } = await supabase
         .from('playback_positions')
-        .select('position_sec')
+        .select('position_sec, updated_at')
         .eq('user_id', userId)
         .eq('episode_id', episodeId)
         .maybeSingle()
       if (error) throw new Error(error.message)
-      const sec = data?.position_sec ?? null
-      if (sec !== null) set((state) => ({ positions: { ...state.positions, [episodeId]: sec } }))
+      if (!data) return null
+      // Not newer than what this device already knows (e.g. this device's
+      // own recent save hasn't reached the server yet) — returning null
+      // here rather than a stale remote value lets the caller fall back to
+      // its own local `positions` cache, which the ledger says is already
+      // at least as current.
+      const key = `playbackPosition:${episodeId}`
+      if (!isRemoteNewer(key, data.updated_at)) return null
+      touchSync(key, new Date(data.updated_at).getTime())
+      const sec = data.position_sec
+      set((state) => ({ positions: { ...state.positions, [episodeId]: sec } }))
       return sec
     } catch (err) {
       console.error(`[position] fetch latest failed for ${episodeId}:`, err)
@@ -942,38 +1076,64 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   refreshPositions: async () => {
-    const userId = await currentUserId()
-    if (!userId) return
+    // Guards against overlapping fetches from rapid background/foreground
+    // toggling (checking a notification, a quick app-switch) — without
+    // this, two in-flight calls race independently and whichever's `set`
+    // lands last wins, which is at best wasted work and at worst the
+    // shorter-lived one's (possibly staler) result landing after the other.
+    if (refreshPositionsInFlight) return refreshPositionsInFlight
+    refreshPositionsInFlight = (async () => {
+      await ensureSyncLedgerLoaded()
+      const userId = await currentUserId()
+      if (!userId) return
+      try {
+        const [positionRows, queueResult] = await Promise.all([
+          fetchAllRows<{ episode_id: string; position_sec: number; updated_at: string }>((from, to) =>
+            supabase
+              .from('playback_positions')
+              .select('*', { count: 'exact' })
+              .eq('user_id', userId)
+              .range(from, to)
+          ),
+          supabase.from('queue').select('*').eq('user_id', userId).maybeSingle()
+        ])
+        const positions: Record<string, number> = {}
+        for (const row of positionRows) {
+          const key = `playbackPosition:${row.episode_id}`
+          if (!isRemoteNewer(key, row.updated_at)) continue
+          positions[row.episode_id] = row.position_sec
+          touchSync(key, new Date(row.updated_at).getTime())
+        }
+        const queueRow = unwrap(queueResult)
+        const acceptQueue = isRemoteNewer('queue', queueRow?.updated_at)
+        const remoteQueue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
+        if (acceptQueue && queueRow?.updated_at) touchSync('queue', new Date(queueRow.updated_at).getTime())
+        set((state) => {
+          const merged = { ...state.positions, ...positions }
+          saveLocalPositions(merged).catch(() => {})
+          return { positions: merged, queue: acceptQueue ? remoteQueue : state.queue }
+        })
+      } catch (err) {
+        console.error('[refreshPositions] failed:', err)
+      }
+    })()
     try {
-      const [positionRows, queueResult] = await Promise.all([
-        fetchAllRows<{ episode_id: string; position_sec: number }>((from, to) =>
-          supabase
-            .from('playback_positions')
-            .select('*', { count: 'exact' })
-            .eq('user_id', userId)
-            .range(from, to)
-        ),
-        supabase.from('queue').select('*').eq('user_id', userId).maybeSingle()
-      ])
-      const positions: Record<string, number> = {}
-      for (const row of positionRows) positions[row.episode_id] = row.position_sec
-      const queueRow = unwrap(queueResult)
-      const queue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
-      set((state) => {
-        const merged = { ...state.positions, ...positions }
-        saveLocalPositions(merged).catch(() => {})
-        return { positions: merged, queue }
-      })
-    } catch (err) {
-      console.error('[refreshPositions] failed:', err)
+      await refreshPositionsInFlight
+    } finally {
+      refreshPositionsInFlight = null
     }
   },
 
   setPlayed: async (episodeId, podcastId, played) => {
+    await ensureSyncLedgerLoaded()
+    const key = `episodePlayed:${episodeId}`
+    const previousLedgerMs = syncLedger[key]
+    let previousPlayed = played
     set((state) => {
-      const episodes = (state.episodesByPodcast[podcastId] ?? []).map((e) =>
-        e.id === episodeId ? { ...e, played } : e
-      )
+      const episodes = (state.episodesByPodcast[podcastId] ?? []).map((e) => {
+        if (e.id === episodeId) previousPlayed = e.played
+        return e.id === episodeId ? { ...e, played } : e
+      })
       return {
         episodesByPodcast: { ...state.episodesByPodcast, [podcastId]: episodes },
         podcasts: state.podcasts.map((p) =>
@@ -981,6 +1141,10 @@ export const useStore = create<AppState>((set, get) => ({
         )
       }
     })
+    // Stamped now, before the network call — protects this edit from being
+    // reverted by a loadLibrary that lands before the upload below finishes
+    // (see isRemoteNewer's doc comment and loadLibrary's played-state gate).
+    touchSync(key)
     const userId = await currentUserId()
     if (!userId) return
     try {
@@ -995,7 +1159,25 @@ export const useStore = create<AppState>((set, get) => ({
       )
       console.log(`[played] saved ${episodeId} -> ${played}`)
     } catch (err) {
+      // Roll back rather than leave this device claiming "played" (or
+      // "unplayed") when that never actually reached the server — previously
+      // this stayed silently applied only on this device until some later
+      // loadLibrary happened to overwrite it back, with no indication to
+      // the user that the toggle they saw succeed hadn't actually saved.
       console.error(`[played] save failed for ${episodeId}:`, err)
+      revertSync(key, previousLedgerMs)
+      set((state) => {
+        const episodes = (state.episodesByPodcast[podcastId] ?? []).map((e) =>
+          e.id === episodeId ? { ...e, played: previousPlayed } : e
+        )
+        return {
+          episodesByPodcast: { ...state.episodesByPodcast, [podcastId]: episodes },
+          podcasts: state.podcasts.map((p) =>
+            p.id === podcastId ? { ...p, unread: episodes.filter((e) => !e.played).length } : p
+          )
+        }
+      })
+      throw err
     }
   },
 
@@ -1027,6 +1209,9 @@ export const useStore = create<AppState>((set, get) => ({
       throw err
     }
 
+    const updatedAtMs = new Date(updatedAt).getTime()
+    for (const e of unplayed) touchSync(`episodePlayed:${e.id}`, updatedAtMs)
+
     set((state) => {
       const updated = (state.episodesByPodcast[podcastId] ?? []).map((e) => ({ ...e, played: true }))
       return {
@@ -1038,20 +1223,42 @@ export const useStore = create<AppState>((set, get) => ({
 
   addToQueue: async (episodeId) => {
     if (get().queue.includes(episodeId)) return
-    const next = [...get().queue, episodeId]
+    const previous = get().queue
+    const next = [...previous, episodeId]
     set({ queue: next })
-    await saveQueue(next)
+    try {
+      await saveQueue(next)
+    } catch (err) {
+      // Roll back rather than leave this device showing a queue the server
+      // never received — otherwise the episode looks added here but is
+      // silently missing again on any other device, with nothing to
+      // indicate the add didn't actually persist.
+      set((state) => ({ queue: state.queue === next ? previous : state.queue }))
+      throw err
+    }
   },
 
   removeFromQueue: async (episodeId) => {
-    const next = get().queue.filter((id) => id !== episodeId)
+    const previous = get().queue
+    const next = previous.filter((id) => id !== episodeId)
     set({ queue: next })
-    await saveQueue(next)
+    try {
+      await saveQueue(next)
+    } catch (err) {
+      set((state) => ({ queue: state.queue === next ? previous : state.queue }))
+      throw err
+    }
   },
 
   reorderQueue: async (episodeIds) => {
+    const previous = get().queue
     set({ queue: episodeIds })
-    await saveQueue(episodeIds)
+    try {
+      await saveQueue(episodeIds)
+    } catch (err) {
+      set((state) => ({ queue: state.queue === episodeIds ? previous : state.queue }))
+      throw err
+    }
   },
 
   loadDownloads: () => {
