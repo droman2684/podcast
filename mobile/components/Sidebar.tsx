@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
-import { Library, Search, Sparkles, ListOrdered } from 'lucide-react-native'
+import { Library, Sparkles, ListOrdered } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from './Artwork'
@@ -16,7 +16,6 @@ export const RAIL_WIDTH = 88
 const ITEMS: { key: Tab; label: string; Icon: typeof Library }[] = [
   { key: 'queue', label: 'Queue', Icon: ListOrdered },
   { key: 'library', label: 'Library', Icon: Library },
-  { key: 'search', label: 'Search', Icon: Search },
   { key: 'discover', label: 'Discover', Icon: Sparkles }
 ]
 

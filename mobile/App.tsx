@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { View, Text, ActivityIndicator } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { useStore } from './state/store'
@@ -7,7 +7,6 @@ import LibraryScreen from './screens/LibraryScreen'
 import EpisodeListScreen from './screens/EpisodeListScreen'
 import PlayerScreen from './screens/PlayerScreen'
 import PodcastSettingsScreen from './screens/PodcastSettingsScreen'
-import SearchScreen from './screens/SearchScreen'
 import DiscoverScreen from './screens/DiscoverScreen'
 import QueueScreen from './screens/QueueScreen'
 import SettingsScreen from './screens/SettingsScreen'
@@ -43,10 +42,16 @@ export default function App(): React.JSX.Element {
   const stationsLoaded = useStore((s) => s.stationsLoaded)
   const loadStations = useStore((s) => s.loadStations)
   const currentEpisodeId = useStore((s) => s.currentEpisodeId)
+  const playing = useStore((s) => s.playing)
+  const togglePlay = useStore((s) => s.togglePlay)
   const loadEpisode = useStore((s) => s.loadEpisode)
 
   const [tab, setTab] = useState<Tab>('queue')
   const [route, setRoute] = useState<Route>({ name: 'tabs' })
+  // Wherever the Player was opened FROM, so its back button returns there
+  // instead of always assuming "the show's episode list" — e.g. opened from
+  // the Queue, back should return to the Queue, not the show page.
+  const cameFromRef = useRef<Route>({ name: 'tabs' })
 
   // Drives the whole iPad adaptation. Called unconditionally, above the
   // authLoading/signedIn early returns, so hook order stays stable.
@@ -105,10 +110,19 @@ export default function App(): React.JSX.Element {
   // Opens the Player screen for an episode. Only (re)loads it into the
   // global engine if it isn't already the current one — re-opening the
   // player for what's already playing shouldn't reset its position/state.
-  const openPlayer = (podcastId: string, episodeId: string): void => {
-    if (currentEpisodeId !== episodeId) loadEpisode(episodeId, { autoplay: false })
+  // Captures the route being left so the Player's back button can return to
+  // it (see cameFromRef above).
+  const openPlayer = (podcastId: string, episodeId: string, autoplay = false): void => {
+    if (currentEpisodeId !== episodeId) {
+      loadEpisode(episodeId, { autoplay })
+    } else if (autoplay && !playing) {
+      togglePlay()
+    }
+    cameFromRef.current = route
     setRoute({ name: 'player', podcastId, episodeId })
   }
+
+  const goBackFromPlayer = (): void => setRoute(cameFromRef.current)
 
   let screen: React.JSX.Element
   let showTabBar = false
@@ -124,8 +138,6 @@ export default function App(): React.JSX.Element {
           onManageCategories={goToCategories}
         />
       )
-    } else if (tab === 'search') {
-      screen = <SearchScreen />
     } else if (tab === 'discover') {
       screen = <DiscoverScreen />
     } else {
@@ -176,7 +188,7 @@ export default function App(): React.JSX.Element {
     const episode = episodesByPodcast[route.podcastId]?.find((e) => e.id === route.episodeId)
     screen =
       podcast && episode ? (
-        <PlayerScreen episode={episode} podcast={podcast} onBack={() => goToEpisodes(podcast.id)} />
+        <PlayerScreen episode={episode} podcast={podcast} onBack={goBackFromPlayer} />
       ) : (
         <LibraryScreen
         onSelectPodcast={goToEpisodes}

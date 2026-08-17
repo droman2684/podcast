@@ -25,7 +25,7 @@ interface QueueItem {
 }
 
 interface Props {
-  onPlay: (podcastId: string, episodeId: string) => void
+  onPlay: (podcastId: string, episodeId: string, autoplay?: boolean) => void
 }
 
 const ROW_SLOT_HEIGHT = 84
@@ -109,7 +109,10 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
             <GripVertical size={18} color={colors.textDisabled} />
           </View>
         )}
-        <Pressable style={styles.rowMain} onPress={() => onPlay(item.podcast.id, item.episode.id)}>
+        <Pressable
+          style={styles.rowMain}
+          onPress={() => onPlay(item.podcast.id, item.episode.id, true)}
+        >
           <Artwork
             url={item.episode.artworkUrl ?? item.podcast.artworkUrl}
             size={44}
