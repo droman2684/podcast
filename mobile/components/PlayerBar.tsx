@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { View, Text, Pressable, StyleSheet } from 'react-native'
-import { Play, Pause, ChevronUp } from 'lucide-react-native'
+import { Play, Pause, ChevronUp, RotateCcw, RotateCw, SkipBack, SkipForward } from 'lucide-react-native'
+import { nextInQueue, previousInQueue } from '@shared/queueView'
 import { useStore } from '../state/store'
 import { buildEpisodeIndex } from '../lib/episodeIndex'
 import { useScrubBar } from '../lib/useScrubBar'
@@ -52,10 +53,15 @@ export default function PlayerBar({ onOpen }: Props): React.JSX.Element | null {
   const setPlaybackRate = useStore((s) => s.setPlaybackRate)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
+  const queue = useStore((s) => s.queue)
+  const playNextInQueue = useStore((s) => s.playNextInQueue)
+  const playPreviousInQueue = useStore((s) => s.playPreviousInQueue)
 
   const episodeIndex = useMemo(() => buildEpisodeIndex(episodesByPodcast), [episodesByPodcast])
   const episode = currentEpisodeId ? episodeIndex.get(currentEpisodeId) : undefined
   const podcast = episode ? podcasts.find((p) => p.id === episode.podcastId) : undefined
+  const canGoPrevious = previousInQueue(queue, currentEpisodeId) !== null
+  const canGoNext = nextInQueue(queue, currentEpisodeId) !== null
 
   const { onBarLayout, panHandlers, progress, displayedTimeSec, scrubbing } = useScrubBar({
     duration,
@@ -96,10 +102,21 @@ export default function PlayerBar({ onOpen }: Props): React.JSX.Element | null {
         </Pressable>
 
         <View style={styles.transport}>
-          <Pressable onPress={() => requestSeek(Math.max(0, currentTimeSec - skipBackSec))}>
-            <Text style={styles.skipText} numberOfLines={1}>
-              -{skipBackSec}s
-            </Text>
+          <Pressable
+            hitSlop={8}
+            disabled={!canGoPrevious}
+            onPress={playPreviousInQueue}
+            accessibilityLabel="Previous in queue"
+          >
+            <SkipBack size={18} color={canGoPrevious ? colors.textSecondary : colors.textDisabled} />
+          </Pressable>
+          <Pressable
+            hitSlop={8}
+            style={styles.skipBtn}
+            onPress={() => requestSeek(Math.max(0, currentTimeSec - skipBackSec))}
+          >
+            <RotateCcw size={22} color={colors.textSecondary} />
+            <Text style={styles.skipLabel}>{skipBackSec}</Text>
           </Pressable>
           <Pressable
             style={styles.playBtn}
@@ -108,10 +125,16 @@ export default function PlayerBar({ onOpen }: Props): React.JSX.Element | null {
           >
             {playing ? <Pause size={24} color="#fff" fill="#fff" /> : <Play size={24} color="#fff" fill="#fff" />}
           </Pressable>
-          <Pressable onPress={() => requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))}>
-            <Text style={styles.skipText} numberOfLines={1}>
-              +{skipForwardSec}s
-            </Text>
+          <Pressable
+            hitSlop={8}
+            style={styles.skipBtn}
+            onPress={() => requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))}
+          >
+            <RotateCw size={22} color={colors.textSecondary} />
+            <Text style={styles.skipLabel}>{skipForwardSec}</Text>
+          </Pressable>
+          <Pressable hitSlop={8} disabled={!canGoNext} onPress={playNextInQueue} accessibilityLabel="Next in queue">
+            <SkipForward size={18} color={canGoNext ? colors.textSecondary : colors.textDisabled} />
           </Pressable>
         </View>
 
@@ -165,8 +188,9 @@ const styles = StyleSheet.create({
   title: { fontSize: 13.5, fontWeight: '600', color: colors.textPrimary },
   podcastName: { fontSize: 11.5, color: colors.textMuted, marginTop: 2 },
 
-  transport: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  skipText: { fontSize: 12.5, fontWeight: '600', color: colors.textSecondary, width: 38, textAlign: 'center' },
+  transport: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+  skipBtn: { alignItems: 'center', width: 34 },
+  skipLabel: { fontSize: 9.5, fontWeight: '700', color: colors.textSecondary, marginTop: 1 },
   playBtn: {
     width: 52,
     height: 52,

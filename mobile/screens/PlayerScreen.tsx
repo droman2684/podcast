@@ -1,7 +1,8 @@
 import { useMemo } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
-import { ChevronDown } from 'lucide-react-native'
+import { ChevronDown, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
+import { nextInQueue, previousInQueue } from '@shared/queueView'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import { stripHtml } from '../lib/stripHtml'
@@ -50,6 +51,8 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const loadEpisode = useStore((s) => s.loadEpisode)
+  const playNextInQueue = useStore((s) => s.playNextInQueue)
+  const playPreviousInQueue = useStore((s) => s.playPreviousInQueue)
 
   const { onBarLayout, panHandlers, progress, displayedTimeSec, scrubbing } = useScrubBar({
     duration,
@@ -74,20 +77,49 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
     [queue, episode.id, episodeIndex]
   )
 
+  // Media-center-style transport (mirrors desktop's NowPlayingPanel):
+  // previous-in-queue / rewind / play-pause / fast-forward / next-in-queue,
+  // rather than just a skip button and a play/pause button. Previous/Next
+  // dim rather than disappear when there's nothing to skip to, so the row
+  // doesn't reflow depending on queue position.
+  const canGoPrevious = previousInQueue(queue, episode.id) !== null
+  const canGoNext = nextInQueue(queue, episode.id) !== null
+
   const controls = (
     <View style={isTablet ? styles.controlsTablet : styles.controls}>
-      <Pressable onPress={() => requestSeek(Math.max(0, currentTimeSec - skipBackSec))}>
-        <Text style={styles.skipBtn}>-{skipBackSec}s</Text>
+      <Pressable
+        hitSlop={8}
+        disabled={!canGoPrevious}
+        onPress={playPreviousInQueue}
+        accessibilityLabel="Previous in queue"
+      >
+        <SkipBack size={20} color={canGoPrevious ? colors.textSecondary : colors.textDisabled} />
+      </Pressable>
+      <Pressable hitSlop={8} style={styles.skipBtn} onPress={() => requestSeek(Math.max(0, currentTimeSec - skipBackSec))}>
+        <RotateCcw size={24} color={colors.textSecondary} />
+        <Text style={styles.skipLabel}>{skipBackSec}</Text>
       </Pressable>
       <Pressable
         style={[styles.playButton, isTablet && styles.playButtonTablet]}
         onPress={togglePlay}
         accessibilityLabel={playing ? 'Pause' : 'Play'}
       >
-        <Text style={styles.playButtonText}>{playing ? 'Pause' : 'Play'}</Text>
+        {playing ? (
+          <Pause size={28} color="#fff" fill="#fff" />
+        ) : (
+          <Play size={28} color="#fff" fill="#fff" style={{ marginLeft: 3 }} />
+        )}
       </Pressable>
-      <Pressable onPress={() => requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))}>
-        <Text style={styles.skipBtn}>+{skipForwardSec}s</Text>
+      <Pressable
+        hitSlop={8}
+        style={styles.skipBtn}
+        onPress={() => requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))}
+      >
+        <RotateCw size={24} color={colors.textSecondary} />
+        <Text style={styles.skipLabel}>{skipForwardSec}</Text>
+      </Pressable>
+      <Pressable hitSlop={8} disabled={!canGoNext} onPress={playNextInQueue} accessibilityLabel="Next in queue">
+        <SkipForward size={20} color={canGoNext ? colors.textSecondary : colors.textDisabled} />
       </Pressable>
     </View>
   )
@@ -264,10 +296,12 @@ const styles = StyleSheet.create({
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
+    gap: 18,
     marginBottom: 16
   },
-  skipBtn: { fontSize: 14, fontWeight: '600', color: colors.textSecondary, width: 60, textAlign: 'center' },
+  skipBtn: { alignItems: 'center', width: 40 },
+  skipLabel: { fontSize: 10, fontWeight: '700', color: colors.textSecondary, marginTop: 1 },
   playButton: {
     backgroundColor: colors.accent,
     borderRadius: 36,
@@ -276,7 +310,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center'
   },
-  playButtonText: { color: '#fff', fontWeight: '700', fontSize: 16 },
   speedBtn: {
     alignSelf: 'center',
     paddingHorizontal: 14,

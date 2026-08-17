@@ -3,6 +3,7 @@ import { AppState as RNAppState } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import type { Podcast, Episode, PodcastSettings, Station, PrivateFeed } from '@shared/types'
 import type { DiscoverPodcast } from '@shared/types'
+import { nextInQueue, previousInQueue } from '@shared/queueView'
 import { supabase } from '../lib/supabase'
 import { parseFeed } from '../lib/rss'
 import { downloadEpisode as downloadEpisodeFile, deleteDownload, listDownloadedUris } from '../lib/downloads'
@@ -331,6 +332,12 @@ interface AppState {
   clearSeekRequest: () => void
   setPlaybackTime: (currentTimeSec: number, duration: number) => void
   setPlaybackRate: (rate: number) => void
+  // Queue-relative transport, same as desktop's playNextInQueue/
+  // playPreviousInQueue (NowPlayingPanel.tsx) — a no-op when there's
+  // nothing to skip to, so callers can wire these straight to a button's
+  // onPress without checking first.
+  playNextInQueue: () => void
+  playPreviousInQueue: () => void
 }
 
 async function saveQueue(episodeIds: string[]): Promise<void> {
@@ -1420,7 +1427,18 @@ export const useStore = create<AppState>((set, get) => ({
   clearSeekRequest: () => set({ seekRequestSec: null }),
 
   setPlaybackTime: (currentTimeSec, duration) => set({ currentTimeSec, duration }),
-  setPlaybackRate: (rate) => set({ playbackRate: rate })
+  setPlaybackRate: (rate) => set({ playbackRate: rate }),
+
+  playNextInQueue: () => {
+    const { queue, currentEpisodeId, loadEpisode } = get()
+    const nextId = nextInQueue(queue, currentEpisodeId)
+    if (nextId) loadEpisode(nextId, { autoplay: true })
+  },
+  playPreviousInQueue: () => {
+    const { queue, currentEpisodeId, loadEpisode } = get()
+    const previousId = previousInQueue(queue, currentEpisodeId)
+    if (previousId) loadEpisode(previousId, { autoplay: true })
+  }
 }))
 
 // Coming back to the foreground is exactly the moment listening may have
