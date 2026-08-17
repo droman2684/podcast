@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
+import { AppState } from 'react-native'
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, type AudioSource } from 'expo-audio'
 import { useStore } from '../state/store'
 import { removeFromQueueOnFinish } from '../lib/queueHelpers'
@@ -40,6 +41,31 @@ export default function AudioEngine(): null {
   const seededPositionFor = useRef<string | null>(null)
   const finishedFor = useRef<string | null>(null)
 
+  // Kept in a ref (rather than read from `status.currentTime` directly)
+  // so the effects below can flush the current position on demand —
+  // pause, episode switch, app backgrounding — without depending on
+  // status.currentTime itself, which ticks on every playback frame and
+  // would otherwise tear down/rebuild those effects continuously.
+  const currentTimeRef = useRef(0)
+  useEffect(() => {
+    currentTimeRef.current = status.currentTime
+  }, [status.currentTime])
+
+  // Writes whatever's currently loaded straight to savePosition rather than
+  // waiting for the next periodic tick — used wherever waiting risks losing
+  // progress the app never gets another chance to save (pausing, switching
+  // episodes, and the app backgrounding, which is the closest mobile
+  // equivalent of Electron's before-quit: there's no reliable hook for
+  // actual termination, but background always fires first). Kept in a ref
+  // so effects with narrow dependency arrays can call the latest version
+  // without needing it in their deps.
+  const flushPositionRef = useRef<() => void>(() => {})
+  flushPositionRef.current = () => {
+    const id = loadedEpisodeId.current
+    const t = currentTimeRef.current
+    if (id && t > 0) savePosition(id, t)
+  }
+
   useEffect(() => {
     setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true }).catch(() => {})
   }, [])
@@ -56,6 +82,11 @@ export default function AudioEngine(): null {
   // required here.
   useEffect(() => {
     if (!episode || loadedEpisodeId.current === episode.id) return
+    // Flush whatever episode was just playing before loadedEpisodeId moves
+    // on — otherwise switching mid-episode (Next in Queue, picking another
+    // show) can lose however many seconds it's been since the last
+    // periodic save.
+    flushPositionRef.current()
     loadedEpisodeId.current = episode.id
     const downloadedUri = downloadedUris[episode.id]
     if (downloadedUri) {
@@ -100,6 +131,16 @@ export default function AudioEngine(): null {
     else player.pause()
   }, [playing, episode?.id, player])
 
+  // Flushes on every playing -> paused transition, keyed only on `playing`
+  // itself (not episode?.id) so this doesn't also fire — using the wrong
+  // episode's stale currentTimeRef — on the render where an episode switch
+  // and a `playing` value that happens to already be false land together.
+  const wasPlayingRef = useRef(false)
+  useEffect(() => {
+    if (wasPlayingRef.current && !playing) flushPositionRef.current()
+    wasPlayingRef.current = playing
+  }, [playing])
+
   useEffect(() => {
     player.setPlaybackRate(playbackRate)
   }, [playbackRate, episode?.id, player])
@@ -135,12 +176,22 @@ export default function AudioEngine(): null {
     }
   }, [status.isLoaded, episode?.id, episode?.title, episode?.artworkUrl, podcast?.name, podcast?.artworkUrl, player])
 
+  // Depends only on `playing` and episode?.id — NOT status.currentTime or
+  // the `episode` object. Both of those change on essentially every
+  // playback frame (status.currentTime ticks continuously while playing;
+  // `episode` is freshly derived from episodeIndex.get() every render, a
+  // new object each time even for the same episode), so including either
+  // used to tear this interval down and rebuild it before 5s ever elapsed —
+  // the callback was created over and over but never actually survived
+  // long enough to fire, so positions were never saved during normal
+  // playback. flushPositionRef reads the current episode/time at call time,
+  // so the interval doesn't need either as a dependency to stay accurate.
   useEffect(() => {
     const interval = setInterval(() => {
-      if (playing && episode && status.currentTime > 0) savePosition(episode.id, status.currentTime)
+      if (playing) flushPositionRef.current()
     }, SAVE_INTERVAL_MS)
     return () => clearInterval(interval)
-  }, [playing, episode, status.currentTime, savePosition])
+  }, [playing, episode?.id])
 
   useEffect(() => {
     if (!status.didJustFinish || !episode || finishedFor.current === episode.id) return
@@ -150,6 +201,20 @@ export default function AudioEngine(): null {
     const nextId = removeFromQueueOnFinish(queue, episode.id, removeFromQueue)
     if (nextId) loadEpisode(nextId, { autoplay: true })
   }, [status.didJustFinish, episode, queue, savePosition, setPlayed, removeFromQueue, loadEpisode])
+
+  // Backgrounding is the closest mobile equivalent of Electron's
+  // before-quit (src/main/index.ts in the desktop app): it's the last
+  // reliable signal before iOS can suspend or kill the process, since
+  // there's no dependable hook for actual termination. Playback itself
+  // keeps running in the background (shouldPlayInBackground above), so this
+  // mainly protects the case where the app is paused and then closed, or
+  // killed shortly after backgrounding before the next periodic save.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') flushPositionRef.current()
+    })
+    return () => subscription.remove()
+  }, [])
 
   return null
 }

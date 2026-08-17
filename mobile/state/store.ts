@@ -55,6 +55,34 @@ async function saveSettings(settings: LocalSettings): Promise<void> {
 // new without an ever-growing list.
 const LAST_SEEN_STORAGE_KEY = 'empirepod.lastSeenEpisodeDate.v1'
 
+// Local durable cache of playback positions, mirroring the desktop app's
+// disk-backed playbackPositions (src/main/persistence.ts): the Supabase
+// write in savePosition() below is a network call that can lose a race with
+// the app being closed, so without a local copy a same-device relaunch has
+// nothing to fall back on but whatever last happened to make it to the
+// server. Cloud sync stays the cross-device source of truth (see
+// fetchLatestPosition/refreshPositions) — this is purely "survive this
+// device closing before that write lands."
+const POSITIONS_STORAGE_KEY = 'empirepod.positions.v1'
+
+async function loadLocalPositions(): Promise<Record<string, number>> {
+  try {
+    const raw = await AsyncStorage.getItem(POSITIONS_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, number>) : {}
+  } catch (err) {
+    console.error('[position] local load failed:', err)
+    return {}
+  }
+}
+
+async function saveLocalPositions(positions: Record<string, number>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(POSITIONS_STORAGE_KEY, JSON.stringify(positions))
+  } catch (err) {
+    console.error('[position] local save failed:', err)
+  }
+}
+
 async function loadLastSeenMap(): Promise<Record<string, string>> {
   try {
     const raw = await AsyncStorage.getItem(LAST_SEEN_STORAGE_KEY)
@@ -147,6 +175,12 @@ interface AppState {
   unsubscribe: (podcastId: string) => Promise<void>
   setNotify: (podcastId: string, notify: boolean) => Promise<void>
 
+  // Hydrates `positions` from this device's local cache before anything
+  // else has loaded — called once at startup (see App.tsx), same as
+  // loadSettings, so a position saved just before this device's app was
+  // last closed is available immediately instead of waiting on loadLibrary's
+  // network round trip.
+  loadCachedPositions: () => Promise<void>
   savePosition: (episodeId: string, positionSec: number) => Promise<void>
   // Fetches the authoritative position for one episode straight from
   // Supabase rather than trusting the local `positions` cache, which can be
@@ -356,6 +390,11 @@ export const useStore = create<AppState>((set, get) => ({
   queueGroupedByShow: DEFAULT_SETTINGS.queueGroupedByShow,
   settingsLoaded: false,
 
+  loadCachedPositions: async () => {
+    const cached = await loadLocalPositions()
+    set({ positions: cached })
+  },
+
   loadSettings: async () => {
     try {
       const raw = await AsyncStorage.getItem(SETTINGS_STORAGE_KEY)
@@ -549,7 +588,17 @@ export const useStore = create<AppState>((set, get) => ({
       const queueRow = unwrap(queueResult)
       const queue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
 
-      set({ positions, podcastSettings, queue, privateFeeds })
+      // Local cache first, remote second: remote wins for any episode it
+      // has a row for (it's authoritative once synced), but a position
+      // saved locally on this device that hasn't reached the server yet
+      // (offline, or just not pushed at the moment the app closed) must
+      // survive this merge rather than being wiped out by a fetch that
+      // simply doesn't know about it yet.
+      set((state) => {
+        const merged = { ...state.positions, ...positions }
+        saveLocalPositions(merged).catch(() => {})
+        return { positions: merged, podcastSettings, queue, privateFeeds }
+      })
 
       const allRows = podcastRows ?? []
       const rowOrder = new Map(allRows.map((row, i) => [row.id, i]))
@@ -845,7 +894,13 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   savePosition: async (episodeId, positionSec) => {
-    set((state) => ({ positions: { ...state.positions, [episodeId]: positionSec } }))
+    const next = { ...get().positions, [episodeId]: positionSec }
+    set({ positions: next })
+    // Written to disk immediately and independently of the network call
+    // below — this is what makes a same-device close/reopen resume
+    // correctly even if the Supabase write below is slow, fails, or never
+    // gets the chance to run before the app is killed.
+    saveLocalPositions(next).catch(() => {})
     const userId = await currentUserId()
     if (!userId) return
     try {
@@ -904,7 +959,11 @@ export const useStore = create<AppState>((set, get) => ({
       for (const row of positionRows) positions[row.episode_id] = row.position_sec
       const queueRow = unwrap(queueResult)
       const queue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
-      set({ positions, queue })
+      set((state) => {
+        const merged = { ...state.positions, ...positions }
+        saveLocalPositions(merged).catch(() => {})
+        return { positions: merged, queue }
+      })
     } catch (err) {
       console.error('[refreshPositions] failed:', err)
     }

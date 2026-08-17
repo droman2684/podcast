@@ -37,6 +37,7 @@ export default function App(): React.JSX.Element {
   const signedIn = useStore((s) => s.signedIn)
   const initAuth = useStore((s) => s.initAuth)
   const loadSettings = useStore((s) => s.loadSettings)
+  const loadCachedPositions = useStore((s) => s.loadCachedPositions)
   const loadDownloads = useStore((s) => s.loadDownloads)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
@@ -68,12 +69,14 @@ export default function App(): React.JSX.Element {
 
   useEffect(() => {
     initAuth()
-    // Device-local prefs (skip durations, default library view) and the
-    // downloaded-episode file listing — neither tied to a user account, so
-    // both load regardless of sign-in state.
+    // Device-local prefs (skip durations, default library view), the
+    // locally-cached playback positions, and the downloaded-episode file
+    // listing — none of these are tied to a user account, so all three load
+    // regardless of sign-in state.
     loadSettings()
+    loadCachedPositions()
     loadDownloads()
-  }, [initAuth, loadSettings, loadDownloads])
+  }, [initAuth, loadSettings, loadCachedPositions, loadDownloads])
 
   // Loads once per sign-in, not once per Library-tab visit — LibraryScreen
   // itself only re-fetches on an explicit pull-to-refresh.
