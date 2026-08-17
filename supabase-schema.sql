@@ -100,3 +100,24 @@ create policy "owner_all" on episode_played for all
   using (user_id = auth.uid()) with check (user_id = auth.uid());
 create policy "owner_all" on private_feeds for all
   using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- Enables live cross-device sync for the mobile app (state/store.ts
+-- subscribeRealtime) — without this, Supabase Realtime has nothing
+-- published for these tables and the client-side subscription silently
+-- receives no events (no error, just nothing happens). RLS above already
+-- restricts each row to its owner, so this is safe to run as-is.
+-- ADD TABLE errors if the table's already in the publication (no IF NOT
+-- EXISTS form for this in Postgres), so each is wrapped to make the whole
+-- block safe to re-run.
+do $$ begin
+  alter publication supabase_realtime add table playback_positions;
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  alter publication supabase_realtime add table queue;
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  alter publication supabase_realtime add table episode_played;
+exception when duplicate_object then null;
+end $$;
