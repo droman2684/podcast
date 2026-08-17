@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio'
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, type AudioSource } from 'expo-audio'
 import { useStore } from '../state/store'
 import { removeFromQueueOnFinish } from '../lib/queueHelpers'
 import { buildEpisodeIndex } from '../lib/episodeIndex'
+import { getPrivateFeedCredential, basicAuthHeader } from '../lib/privateFeedCredentials'
 
 const SAVE_INTERVAL_MS = 5000
 
@@ -46,12 +47,33 @@ export default function AudioEngine(): null {
   // creation — later changes must go through player.replace(), which is
   // exactly what a persistent single player needs anyway. Prefers the
   // downloaded local file over the network URL when one exists, so a
-  // downloaded episode plays offline instead of streaming.
+  // downloaded episode plays offline instead of streaming. A downloaded
+  // file needs no auth (it's already local); a private feed streamed
+  // directly does, via the same Basic-auth credential used to fetch its
+  // RSS — expo-audio's source object accepts per-request headers, so no
+  // network-layer interception (which desktop needs, lacking that) is
+  // required here.
   useEffect(() => {
     if (!episode || loadedEpisodeId.current === episode.id) return
     loadedEpisodeId.current = episode.id
-    player.replace(downloadedUris[episode.id] ?? episode.audioUrl)
-  }, [episode?.id, episode?.audioUrl, downloadedUris, player])
+    const downloadedUri = downloadedUris[episode.id]
+    if (downloadedUri) {
+      player.replace(downloadedUri)
+      return
+    }
+    if (!podcast?.isPrivate) {
+      player.replace(episode.audioUrl)
+      return
+    }
+    getPrivateFeedCredential(podcast.id).then((credential) => {
+      // Bail if a different episode loaded while this lookup was in flight.
+      if (loadedEpisodeId.current !== episode.id) return
+      const source: AudioSource = credential
+        ? { uri: episode.audioUrl, headers: { Authorization: basicAuthHeader(credential.user, credential.password) } }
+        : episode.audioUrl
+      player.replace(source)
+    })
+  }, [episode?.id, episode?.audioUrl, downloadedUris, podcast?.isPrivate, podcast?.id, player])
 
   useEffect(() => {
     if (!status.isLoaded || !episode || seededPositionFor.current === episode.id) return

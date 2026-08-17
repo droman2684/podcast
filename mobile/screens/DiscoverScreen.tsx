@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { View, Text, TextInput, ScrollView, FlatList, Pressable, StyleSheet, ActivityIndicator } from 'react-native'
-import { Search, X } from 'lucide-react-native'
+import { Search, X, Settings, Lock } from 'lucide-react-native'
 import type { DiscoverPodcast } from '@shared/types'
 import { CATEGORY_GENRE_IDS, getCategoryPicks, getPodcastOfTheDay, searchPodcasts } from '../lib/itunes'
 import { useStore } from '../state/store'
@@ -9,11 +9,16 @@ import { colors, radii, cardShadow } from '../theme'
 
 const CATEGORIES = Object.keys(CATEGORY_GENRE_IDS)
 
+interface Props {
+  onOpenAppSettings: () => void
+  onAddPrivateFeed: () => void
+}
+
 // Search and Discover used to be separate tabs — merged per request, with a
 // search field at the top of this screen replacing the browse content
 // (daily pick / category picks) whenever there's a non-empty search term,
 // rather than living side by side with it.
-export default function DiscoverScreen(): React.JSX.Element {
+export default function DiscoverScreen({ onOpenAppSettings, onAddPrivateFeed }: Props): React.JSX.Element {
   const podcasts = useStore((s) => s.podcasts)
   const subscribe = useStore((s) => s.subscribe)
   const subscribedIds = new Set(podcasts.map((p) => p.id))
@@ -121,7 +126,12 @@ export default function DiscoverScreen(): React.JSX.Element {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Discover</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>Discover</Text>
+        <Pressable hitSlop={10} onPress={onOpenAppSettings} accessibilityLabel="Settings">
+          <Settings size={20} color={colors.textMuted} />
+        </Pressable>
+      </View>
 
       <View style={styles.searchRow}>
         <Search size={16} color={colors.textPlaceholder} />
@@ -147,6 +157,11 @@ export default function DiscoverScreen(): React.JSX.Element {
           </Pressable>
         )}
       </View>
+
+      <Pressable style={styles.privateFeedLink} onPress={onAddPrivateFeed}>
+        <Lock size={12} color={colors.accent} />
+        <Text style={styles.privateFeedLinkText}>Add a private feed</Text>
+      </Pressable>
 
       {subscribeError && <Text style={styles.error}>{subscribeError}</Text>}
 
@@ -228,7 +243,14 @@ const PICK_ART_SIZE = 104
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
-  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, paddingHorizontal: 20, marginBottom: 12 },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 12
+  },
+  title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -242,6 +264,15 @@ const styles = StyleSheet.create({
     borderRadius: radii.input
   },
   searchInput: { flex: 1, paddingVertical: 10, fontSize: 15 },
+  privateFeedLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    alignSelf: 'flex-start',
+    marginHorizontal: 20,
+    marginBottom: 14
+  },
+  privateFeedLinkText: { fontSize: 12.5, fontWeight: '600', color: colors.accent },
   error: { color: colors.danger, paddingHorizontal: 20, marginBottom: 8 },
   empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40, paddingHorizontal: 30 },
   searchContent: { paddingHorizontal: 20, paddingBottom: 20 },

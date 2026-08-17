@@ -1,11 +1,17 @@
 import { create } from 'zustand'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import type { Podcast, Episode, PodcastSettings, Station } from '@shared/types'
+import type { Podcast, Episode, PodcastSettings, Station, PrivateFeed } from '@shared/types'
 import type { DiscoverPodcast } from '@shared/types'
 import { supabase } from '../lib/supabase'
 import { parseFeed } from '../lib/rss'
 import { downloadEpisode as downloadEpisodeFile, deleteDownload, listDownloadedUris } from '../lib/downloads'
 import { hashId } from '../lib/hash'
+import {
+  getPrivateFeedCredential,
+  savePrivateFeedCredential,
+  deletePrivateFeedCredential,
+  basicAuthHeader
+} from '../lib/privateFeedCredentials'
 
 export type LibraryView = 'grid' | 'list' | 'category'
 
@@ -79,6 +85,13 @@ interface StationRow {
   podcast_ids: string[] | null
   sort_by: string
   episodes_per_show: number
+}
+
+interface PrivateFeedRow {
+  id: string
+  name: string
+  url: string
+  feed_user: string
 }
 
 async function currentUserId(): Promise<string | null> {
@@ -165,6 +178,18 @@ interface AppState {
   deleteCategory: (stationId: string) => Promise<void>
   addPodcastToCategory: (stationId: string, podcastId: string) => Promise<void>
   removePodcastFromCategory: (stationId: string, podcastId: string) => Promise<void>
+
+  // Private feeds: identity (name/url/user) syncs via Supabase's
+  // private_feeds table same as desktop, but the password lives ONLY in
+  // this device's secure storage (see lib/privateFeedCredentials.ts) —
+  // never synced, never held in this state. A feed synced from another
+  // device shows up with no local credential until re-entered here; those
+  // ids are tracked in privateFeedsMissingCredential so the Library can
+  // show a "needs password" affordance instead of a broken/empty show.
+  privateFeeds: Record<string, PrivateFeed>
+  privateFeedsMissingCredential: Record<string, boolean>
+  addPrivateFeed: (url: string, user: string, password: string) => Promise<void>
+  retryPrivateFeedCredential: (feedId: string, user: string, password: string) => Promise<void>
 
   // Live playback state, read/written by AudioEngine (components/AudioEngine.tsx,
   // mounted once at the app root) and by any screen that wants to control or
@@ -310,6 +335,9 @@ export const useStore = create<AppState>((set, get) => ({
   stations: [],
   stationsLoaded: false,
 
+  privateFeeds: {},
+  privateFeedsMissingCredential: {},
+
   skipBackSec: DEFAULT_SETTINGS.skipBackSec,
   skipForwardSec: DEFAULT_SETTINGS.skipForwardSec,
   defaultLibraryView: DEFAULT_SETTINGS.defaultLibraryView,
@@ -445,10 +473,10 @@ export const useStore = create<AppState>((set, get) => ({
       const userId = await currentUserId()
       if (!userId) throw new Error('Not signed in')
 
-      // These five reads are independent of each other — running them in
-      // parallel rather than as sequential awaits removes ~4 network
+      // These six reads are independent of each other — running them in
+      // parallel rather than as sequential awaits removes ~5 network
       // round-trips worth of latency before RSS fetching even starts.
-      const [podcastRows, positionRows, playedRows, settingsRows, queueResult] = await Promise.all([
+      const [podcastRows, positionRows, playedRows, settingsRows, queueResult, privateFeedRows] = await Promise.all([
         fetchAllRows<PodcastRow>((from, to) =>
           supabase
             .from('podcasts')
@@ -478,9 +506,22 @@ export const useStore = create<AppState>((set, get) => ({
             .eq('user_id', userId)
             .range(from, to)
         ),
-        supabase.from('queue').select('*').eq('user_id', userId).maybeSingle()
+        supabase.from('queue').select('*').eq('user_id', userId).maybeSingle(),
+        fetchAllRows<PrivateFeedRow>((from, to) =>
+          supabase
+            .from('private_feeds')
+            .select('*', { count: 'exact' })
+            .eq('user_id', userId)
+            .is('deleted_at', null)
+            .range(from, to)
+        )
       ])
       console.log(`[loadLibrary] ${podcastRows.length} non-deleted podcast row(s)`)
+
+      const privateFeeds: Record<string, PrivateFeed> = {}
+      for (const row of privateFeedRows) {
+        privateFeeds[row.id] = { id: row.id, name: row.name, url: row.url, user: row.feed_user }
+      }
 
       const positions: Record<string, number> = {}
       for (const row of positionRows) positions[row.episode_id] = row.position_sec
@@ -496,14 +537,11 @@ export const useStore = create<AppState>((set, get) => ({
       const queueRow = unwrap(queueResult)
       const queue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
 
-      set({ positions, podcastSettings, queue })
+      set({ positions, podcastSettings, queue, privateFeeds })
 
-      const publicRows = (podcastRows ?? []).filter((row) => !row.is_private)
-      // Private feeds need a password that, by design, never leaves the
-      // device that created them (see the desktop app's privateFeeds.ts) —
-      // not supported on mobile yet, so skipped rather than shown as a feed
-      // that can never actually load here.
-      const rowOrder = new Map(publicRows.map((row, i) => [row.id, i]))
+      const allRows = podcastRows ?? []
+      const rowOrder = new Map(allRows.map((row, i) => [row.id, i]))
+      const missingCredential: Record<string, boolean> = {}
 
       // Merges each feed into the store as soon as it's parsed, instead of
       // waiting for every feed to finish — previously the whole screen sat
@@ -530,11 +568,38 @@ export const useStore = create<AppState>((set, get) => ({
       const newEpisodes: Episode[] = []
 
       await mapWithConcurrency(
-        publicRows,
+        allRows,
         FEED_FETCH_CONCURRENCY,
         async (row) => {
+          // A private feed with no locally-saved credential (synced from
+          // another device, never unlocked on this one) can't be fetched —
+          // show it as a placeholder using the identity synced via
+          // private_feeds instead of silently dropping it or erroring.
+          let authHeader: string | undefined
+          if (row.is_private) {
+            const credential = await getPrivateFeedCredential(row.id)
+            if (!credential) {
+              missingCredential[row.id] = true
+              const identity = privateFeeds[row.id]
+              const podcast: Podcast = {
+                id: row.id,
+                feedUrl: row.feed_url,
+                name: identity?.name ?? identity?.url ?? row.feed_url,
+                author: '',
+                artworkUrl: null,
+                customArtworkUrl: row.custom_artwork_url,
+                description: '',
+                category: null,
+                unread: 0,
+                isPrivate: true
+              }
+              return { podcast, episodes: [] }
+            }
+            authHeader = basicAuthHeader(credential.user, credential.password)
+          }
+
           try {
-            const parsed = await parseFeed(row.feed_url, row.id)
+            const parsed = await parseFeed(row.feed_url, row.id, authHeader)
             const episodes = parsed.episodes.map((e) => ({
               ...e,
               played: playedByEpisode.get(e.id) ?? false
@@ -549,7 +614,7 @@ export const useStore = create<AppState>((set, get) => ({
               description: parsed.description,
               category: parsed.category,
               unread: episodes.filter((e) => !e.played).length,
-              isPrivate: false
+              isPrivate: row.is_private
             }
 
             const priorMark = lastSeen[row.id]
@@ -569,6 +634,8 @@ export const useStore = create<AppState>((set, get) => ({
         },
         mergeFeed
       )
+
+      set({ privateFeedsMissingCredential: missingCredential })
 
       await saveLastSeenMap(lastSeen)
       if (newEpisodes.length > 0) {
@@ -626,6 +693,7 @@ export const useStore = create<AppState>((set, get) => ({
   unsubscribe: async (podcastId) => {
     const userId = await currentUserId()
     if (!userId) return
+    const isPrivate = get().podcasts.find((p) => p.id === podcastId)?.isPrivate ?? false
     const removedEpisodeIds = new Set((get().episodesByPodcast[podcastId] ?? []).map((e) => e.id))
     const previousQueue = get().queue
     const nextQueue = previousQueue.filter((id) => !removedEpisodeIds.has(id))
@@ -633,13 +701,19 @@ export const useStore = create<AppState>((set, get) => ({
     const affectedStationIds = get()
       .stations.filter((s) => s.podcastIds.includes(podcastId))
       .map((s) => s.id)
-    set((state) => ({
-      podcasts: state.podcasts.filter((p) => p.id !== podcastId),
-      episodesByPodcast: Object.fromEntries(
-        Object.entries(state.episodesByPodcast).filter(([id]) => id !== podcastId)
-      ),
-      queue: nextQueue
-    }))
+    set((state) => {
+      const { [podcastId]: _removedFeed, ...restPrivateFeeds } = state.privateFeeds
+      const { [podcastId]: _removedMissing, ...restMissing } = state.privateFeedsMissingCredential
+      return {
+        podcasts: state.podcasts.filter((p) => p.id !== podcastId),
+        episodesByPodcast: Object.fromEntries(
+          Object.entries(state.episodesByPodcast).filter(([id]) => id !== podcastId)
+        ),
+        queue: nextQueue,
+        privateFeeds: restPrivateFeeds,
+        privateFeedsMissingCredential: restMissing
+      }
+    })
     const now = new Date().toISOString()
     try {
       unwrap(
@@ -651,11 +725,86 @@ export const useStore = create<AppState>((set, get) => ({
     } catch (err) {
       console.error(`[unsubscribe] tombstone failed for ${podcastId}:`, err)
     }
+    if (isPrivate) {
+      // Mirrors desktop's removePrivateFeed: the podcast row and the
+      // private_feeds identity row are two separate synced rows for the
+      // same feed, so both need a tombstone or the identity would dangle
+      // on every other device. The credential only ever lived on this
+      // device, so it's just deleted, not synced anywhere.
+      try {
+        unwrap(
+          await supabase
+            .from('private_feeds')
+            .upsert({ user_id: userId, id: podcastId, deleted_at: now, updated_at: now })
+        )
+      } catch (err) {
+        console.error(`[unsubscribe] private_feeds tombstone failed for ${podcastId}:`, err)
+      }
+      await deletePrivateFeedCredential(podcastId)
+    }
     if (queueChanged) await saveQueue(nextQueue)
     // Mirrors the desktop app's unsubscribe cascade: an unsubscribed show
     // shouldn't linger as a dangling id in a category (Station) that can
     // never resolve to anything.
     await Promise.all(affectedStationIds.map((id) => get().removePodcastFromCategory(id, podcastId)))
+  },
+
+  // Validates the credentials work, saves the password to this device's
+  // secure storage only (never synced — see lib/privateFeedCredentials.ts),
+  // and syncs the identity (name/url/user, no password) plus a podcast row
+  // marked isPrivate so it shows up in the Library like any other show.
+  addPrivateFeed: async (rawUrl, rawUser, password) => {
+    const userId = await currentUserId()
+    if (!userId) throw new Error('Not signed in')
+    const url = rawUrl.trim()
+    const user = rawUser.trim()
+    if (!url || !user || !password) throw new Error('URL, username, and password are all required')
+
+    const id = await hashId(url)
+    const authHeader = basicAuthHeader(user, password)
+    const parsed = await parseFeed(url, id, authHeader)
+    const name = parsed.name || url.replace(/^https?:\/\//, '').split('/')[0]
+
+    await savePrivateFeedCredential(id, user, password)
+
+    const now = new Date().toISOString()
+    unwrap(
+      await supabase.from('podcasts').upsert({
+        user_id: userId,
+        id,
+        feed_url: url,
+        is_private: true,
+        custom_artwork_url: null,
+        updated_at: now,
+        deleted_at: null
+      })
+    )
+    unwrap(
+      await supabase.from('private_feeds').upsert({
+        user_id: userId,
+        id,
+        name,
+        url,
+        feed_user: user,
+        updated_at: now,
+        deleted_at: null
+      })
+    )
+
+    await get().loadLibrary()
+  },
+
+  // For a private feed synced from another device with no local
+  // credential yet (see privateFeedsMissingCredential) — just saves the
+  // password and re-loads, reusing loadLibrary's existing fetch path
+  // rather than duplicating it here.
+  retryPrivateFeedCredential: async (feedId, user, password) => {
+    const url = get().privateFeeds[feedId]?.url
+    if (!url) throw new Error('Unknown private feed')
+    const authHeader = basicAuthHeader(user.trim(), password)
+    await parseFeed(url, feedId, authHeader)
+    await savePrivateFeedCredential(feedId, user.trim(), password)
+    await get().loadLibrary()
   },
 
   setNotify: async (podcastId, notify) => {
@@ -802,7 +951,13 @@ export const useStore = create<AppState>((set, get) => ({
     if (get().downloadedUris[episode.id] || get().downloadingIds[episode.id]) return
     set((state) => ({ downloadingIds: { ...state.downloadingIds, [episode.id]: true } }))
     try {
-      const uri = await downloadEpisodeFile(episode.id, episode.audioUrl)
+      const podcast = get().podcasts.find((p) => p.id === episode.podcastId)
+      let authHeader: string | undefined
+      if (podcast?.isPrivate) {
+        const credential = await getPrivateFeedCredential(episode.podcastId)
+        if (credential) authHeader = basicAuthHeader(credential.user, credential.password)
+      }
+      const uri = await downloadEpisodeFile(episode.id, episode.audioUrl, authHeader)
       set((state) => ({ downloadedUris: { ...state.downloadedUris, [episode.id]: uri } }))
     } catch (err) {
       console.error(`[downloads] failed for ${episode.id}:`, err)

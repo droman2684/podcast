@@ -45,14 +45,17 @@ export interface ParsedFeed {
 
 const FEED_FETCH_TIMEOUT_MS = 15000
 
-export async function parseFeed(feedUrl: string, podcastId: string): Promise<ParsedFeed> {
+export async function parseFeed(feedUrl: string, podcastId: string, authHeader?: string): Promise<ParsedFeed> {
   // Bare fetch() has no timeout — one slow or hung podcast host used to be
   // able to stall the whole batch it was fetched alongside indefinitely.
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), FEED_FETCH_TIMEOUT_MS)
   let res: Response
   try {
-    res = await fetch(feedUrl, { signal: controller.signal })
+    res = await fetch(feedUrl, {
+      signal: controller.signal,
+      headers: authHeader ? { Authorization: authHeader } : undefined
+    })
   } finally {
     clearTimeout(timeout)
   }

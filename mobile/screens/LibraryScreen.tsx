@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { View, Text, FlatList, ScrollView, Pressable, Alert, StyleSheet, ActivityIndicator } from 'react-native'
-import { Grid2x2, List, Tags, ChevronRight, Settings, MoreVertical } from 'lucide-react-native'
+import { Grid2x2, List, Tags, ChevronRight, Settings, MoreVertical, Lock } from 'lucide-react-native'
 import type { Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
@@ -16,13 +16,15 @@ interface Props {
   onOpenSettings: (id: string) => void
   onOpenAppSettings: () => void
   onManageCategories: () => void
+  onRetryPrivateFeed: (feedId: string) => void
 }
 
 export default function LibraryScreen({
   onSelectPodcast,
   onOpenSettings,
   onOpenAppSettings,
-  onManageCategories
+  onManageCategories,
+  onRetryPrivateFeed
 }: Props): React.JSX.Element {
   const podcasts = useStore((s) => s.podcasts)
   const loading = useStore((s) => s.libraryLoading)
@@ -31,6 +33,7 @@ export default function LibraryScreen({
   const unsubscribe = useStore((s) => s.unsubscribe)
   const defaultLibraryView = useStore((s) => s.defaultLibraryView)
   const stations = useStore((s) => s.stations)
+  const privateFeedsMissingCredential = useStore((s) => s.privateFeedsMissingCredential)
 
   // Seeded from the user's Settings preference. This screen remounts on
   // every tab visit (see comment below), so re-reading the store default
@@ -69,69 +72,98 @@ export default function LibraryScreen({
     ])
   }
 
+  // A private feed synced from another device (identity only, no
+  // credential on this one — see the store's privateFeeds comment) opens
+  // the "enter password" screen instead of an episode list that can never
+  // have anything in it until that happens.
+  const openPodcast = (podcast: Podcast): void => {
+    if (privateFeedsMissingCredential[podcast.id]) onRetryPrivateFeed(podcast.id)
+    else onSelectPodcast(podcast.id)
+  }
+
   // Grid has no swipe gesture (rows don't apply to a multi-column layout).
   // Long-press still works as a shortcut, but a gesture with zero on-screen
   // hint is one most people never discover — the "•••" button is the
   // visible, discoverable path to the same confirm dialog.
-  const renderGridItem = ({ item }: { item: Podcast }): React.JSX.Element => (
-    <Pressable
-      style={styles.gridCard}
-      onPress={() => onSelectPodcast(item.id)}
-      onLongPress={() => confirmUnsubscribe(item)}
-      accessibilityLabel={item.name}
-      accessibilityHint="Double tap to open. Long press to unsubscribe."
-    >
-      <View>
-        <Artwork url={item.customArtworkUrl ?? item.artworkUrl} size={GRID_ART_SIZE} radius={radii.artworkSm} />
-        {item.unread > 0 && (
-          <View style={styles.gridBadge}>
-            <Text style={styles.gridBadgeText}>{item.unread}</Text>
-          </View>
-        )}
-        <Pressable
-          style={styles.gridMoreBtn}
-          hitSlop={8}
-          onPress={(e) => {
-            e.stopPropagation()
-            confirmUnsubscribe(item)
-          }}
-          accessibilityLabel={`More options for ${item.name}`}
-        >
-          <MoreVertical size={13} color="#fff" />
-        </Pressable>
-      </View>
-      <Text style={styles.gridName} numberOfLines={2}>
-        {item.name}
-      </Text>
-      <Text style={styles.gridAuthor} numberOfLines={1}>
-        {item.author}
-      </Text>
-    </Pressable>
-  )
-
-  const renderListItem = ({ item }: { item: Podcast }): React.JSX.Element => (
-    <SwipeToDelete deleteLabel="Unsubscribe" onDelete={() => unsubscribe(item.id)}>
-      <Pressable style={styles.listRow} onPress={() => onSelectPodcast(item.id)}>
-        <Artwork url={item.customArtworkUrl ?? item.artworkUrl} size={48} radius={radii.artworkSm} />
-        <View style={styles.listMeta}>
-          <Text style={styles.listName} numberOfLines={1}>
-            {item.name}
-          </Text>
-          <Text style={styles.listAuthor} numberOfLines={1}>
-            {item.author}
-          </Text>
+  const renderGridItem = ({ item }: { item: Podcast }): React.JSX.Element => {
+    const needsPassword = privateFeedsMissingCredential[item.id]
+    return (
+      <Pressable
+        style={styles.gridCard}
+        onPress={() => openPodcast(item)}
+        onLongPress={() => confirmUnsubscribe(item)}
+        accessibilityLabel={item.name}
+        accessibilityHint={
+          needsPassword
+            ? 'This private feed needs its password entered on this device.'
+            : 'Double tap to open. Long press to unsubscribe.'
+        }
+      >
+        <View>
+          <Artwork url={item.customArtworkUrl ?? item.artworkUrl} size={GRID_ART_SIZE} radius={radii.artworkSm} />
+          {needsPassword ? (
+            <View style={styles.gridBadge}>
+              <Lock size={11} color="#fff" />
+            </View>
+          ) : (
+            item.unread > 0 && (
+              <View style={styles.gridBadge}>
+                <Text style={styles.gridBadgeText}>{item.unread}</Text>
+              </View>
+            )
+          )}
+          <Pressable
+            style={styles.gridMoreBtn}
+            hitSlop={8}
+            onPress={(e) => {
+              e.stopPropagation()
+              confirmUnsubscribe(item)
+            }}
+            accessibilityLabel={`More options for ${item.name}`}
+          >
+            <MoreVertical size={13} color="#fff" />
+          </Pressable>
         </View>
-        {item.unread > 0 && (
-          <View style={styles.listBadge}>
-            <Text style={styles.gridBadgeText}>{item.unread}</Text>
-          </View>
-        )}
-        <Pressable hitSlop={10} onPress={() => onOpenSettings(item.id)} accessibilityLabel={`${item.name} settings`}>
-          <ChevronRight size={16} color={colors.textDisabled} />
-        </Pressable>
+        <Text style={styles.gridName} numberOfLines={2}>
+          {item.name}
+        </Text>
+        <Text style={styles.gridAuthor} numberOfLines={1}>
+          {needsPassword ? 'Needs password' : item.author}
+        </Text>
       </Pressable>
-    </SwipeToDelete>
-  )
+    )
+  }
+
+  const renderListItem = ({ item }: { item: Podcast }): React.JSX.Element => {
+    const needsPassword = privateFeedsMissingCredential[item.id]
+    return (
+      <SwipeToDelete deleteLabel="Unsubscribe" onDelete={() => unsubscribe(item.id)}>
+        <Pressable style={styles.listRow} onPress={() => openPodcast(item)}>
+          <Artwork url={item.customArtworkUrl ?? item.artworkUrl} size={48} radius={radii.artworkSm} />
+          <View style={styles.listMeta}>
+            <Text style={styles.listName} numberOfLines={1}>
+              {item.name}
+            </Text>
+            <Text style={styles.listAuthor} numberOfLines={1}>
+              {needsPassword ? 'Needs password' : item.author}
+            </Text>
+          </View>
+          {needsPassword ? (
+            <Lock size={14} color={colors.textMuted} />
+          ) : (
+            item.unread > 0 && (
+              <View style={styles.listBadge}>
+                <Text style={styles.gridBadgeText}>{item.unread}</Text>
+              </View>
+            )
+          )}
+          <Pressable hitSlop={10} onPress={() => onOpenSettings(item.id)} accessibilityLabel={`${item.name} settings`}>
+            <ChevronRight size={16} color={colors.textDisabled} />
+          </Pressable>
+        </Pressable>
+      </SwipeToDelete>
+    )
+  }
 
   return (
     <View style={styles.container}>

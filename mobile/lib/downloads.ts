@@ -34,11 +34,14 @@ export function listDownloadedUris(): Record<string, string> {
   return map
 }
 
-export async function downloadEpisode(episodeId: string, audioUrl: string): Promise<string> {
+export async function downloadEpisode(episodeId: string, audioUrl: string, authHeader?: string): Promise<string> {
   const dir = downloadsDirectory()
   if (!dir.exists) dir.create({ intermediates: true, idempotent: true })
   const target = new File(dir, `${episodeId}${extensionFromUrl(audioUrl)}`)
-  const file = await File.downloadFileAsync(audioUrl, target, { idempotent: true })
+  const file = await File.downloadFileAsync(audioUrl, target, {
+    idempotent: true,
+    headers: authHeader ? { Authorization: authHeader } : undefined
+  })
   return file.uri
 }
 

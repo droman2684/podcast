@@ -9,7 +9,7 @@ import {
   StyleSheet,
   type GestureResponderHandlers
 } from 'react-native'
-import { GripVertical, Play, Pause, Info, X, Download, Trash2 } from 'lucide-react-native'
+import { GripVertical, Play, Pause, Info, X, Download, Trash2, Settings } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { groupByPodcast } from '@shared/queueView'
 import { useStore } from '../state/store'
@@ -28,6 +28,7 @@ interface Props {
   onPlay: (podcastId: string, episodeId: string, autoplay?: boolean) => void
   onBrowseLibrary: () => void
   onBrowseDiscover: () => void
+  onOpenAppSettings: () => void
 }
 
 const ROW_SLOT_HEIGHT = 84
@@ -41,7 +42,12 @@ function formatRemaining(durationSec: number, positionSec: number): string {
   return m > 0 ? `${m}m left` : '<1m left'
 }
 
-export default function QueueScreen({ onPlay, onBrowseLibrary, onBrowseDiscover }: Props): React.JSX.Element {
+export default function QueueScreen({
+  onPlay,
+  onBrowseLibrary,
+  onBrowseDiscover,
+  onOpenAppSettings
+}: Props): React.JSX.Element {
   const queue = useStore((s) => s.queue)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
@@ -180,6 +186,11 @@ export default function QueueScreen({ onPlay, onBrowseLibrary, onBrowseDiscover 
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Queue</Text>
+        <Pressable hitSlop={10} onPress={onOpenAppSettings} accessibilityLabel="Settings">
+          <Settings size={20} color={colors.textMuted} />
+        </Pressable>
+      </View>
+      <View style={styles.toolbar}>
         <Pressable
           style={[styles.groupToggle, grouped && styles.groupToggleActive]}
           onPress={() => setGrouped(!grouped)}
@@ -333,6 +344,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    paddingHorizontal: 20,
+    marginBottom: 12
+  },
+  toolbar: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
     paddingHorizontal: 20,
     marginBottom: 16
   },

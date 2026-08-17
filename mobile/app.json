@@ -46,7 +46,8 @@
         }
       ],
       "expo-asset",
-      "./plugins/withRemoteControlEvents.js"
+      "./plugins/withRemoteControlEvents.js",
+      "expo-secure-store"
     ],
     "extra": {
       "eas": {

@@ -13,6 +13,7 @@ import QueueScreen from './screens/QueueScreen'
 import SettingsScreen from './screens/SettingsScreen'
 import CategoriesScreen from './screens/CategoriesScreen'
 import CategoryDetailScreen from './screens/CategoryDetailScreen'
+import PrivateFeedScreen from './screens/PrivateFeedScreen'
 import TabBar, { type Tab } from './components/TabBar'
 import Sidebar from './components/Sidebar'
 import AudioEngine from './components/AudioEngine'
@@ -28,6 +29,7 @@ type Route =
   | { name: 'settings' }
   | { name: 'categories' }
   | { name: 'categoryDetail'; stationId: string }
+  | { name: 'privateFeed'; retryFeedId?: string }
 
 export default function App(): React.JSX.Element {
   const authLoading = useStore((s) => s.authLoading)
@@ -113,6 +115,8 @@ export default function App(): React.JSX.Element {
   const goToAppSettings = (): void => setRoute({ name: 'settings' })
   const goToCategories = (): void => setRoute({ name: 'categories' })
   const goToCategoryDetail = (stationId: string): void => setRoute({ name: 'categoryDetail', stationId })
+  const goToAddPrivateFeed = (): void => setRoute({ name: 'privateFeed' })
+  const goToRetryPrivateFeed = (retryFeedId: string): void => setRoute({ name: 'privateFeed', retryFeedId })
 
   // Opens the Player screen for an episode. Only (re)loads it into the
   // global engine if it isn't already the current one — re-opening the
@@ -153,16 +157,18 @@ export default function App(): React.JSX.Element {
           onOpenSettings={openSettings}
           onOpenAppSettings={goToAppSettings}
           onManageCategories={goToCategories}
+        onRetryPrivateFeed={goToRetryPrivateFeed}
         />
       )
     } else if (tab === 'discover') {
-      screen = <DiscoverScreen />
+      screen = <DiscoverScreen onOpenAppSettings={goToAppSettings} onAddPrivateFeed={goToAddPrivateFeed} />
     } else {
       screen = (
         <QueueScreen
           onPlay={openPlayer}
           onBrowseLibrary={() => selectTab('library')}
           onBrowseDiscover={() => selectTab('discover')}
+          onOpenAppSettings={goToAppSettings}
         />
       )
     }
@@ -181,6 +187,7 @@ export default function App(): React.JSX.Element {
         onOpenSettings={openSettings}
         onOpenAppSettings={goToAppSettings}
         onManageCategories={goToCategories}
+        onRetryPrivateFeed={goToRetryPrivateFeed}
       />
     )
   } else if (route.name === 'podcastSettings') {
@@ -193,6 +200,7 @@ export default function App(): React.JSX.Element {
         onOpenSettings={openSettings}
         onOpenAppSettings={goToAppSettings}
         onManageCategories={goToCategories}
+        onRetryPrivateFeed={goToRetryPrivateFeed}
       />
     )
   } else if (route.name === 'settings') {
@@ -206,6 +214,8 @@ export default function App(): React.JSX.Element {
     ) : (
       <CategoriesScreen onBack={goToTabs} onOpenCategory={goToCategoryDetail} />
     )
+  } else if (route.name === 'privateFeed') {
+    screen = <PrivateFeedScreen onBack={goToTabs} retryFeedId={route.retryFeedId} />
   } else {
     // Resolves from the live currentEpisodeId rather than the route's own
     // episodeId — the route params only reflect what was true at the
@@ -228,6 +238,7 @@ export default function App(): React.JSX.Element {
           onOpenSettings={openSettings}
           onOpenAppSettings={goToAppSettings}
           onManageCategories={goToCategories}
+        onRetryPrivateFeed={goToRetryPrivateFeed}
         />
       )
   }
