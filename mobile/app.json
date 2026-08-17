@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "Empire Pod",
-    "slug": "mobile",
+    "slug": "empirepods",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",
@@ -32,7 +32,9 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.RECORD_AUDIO",
-        "android.permission.MODIFY_AUDIO_SETTINGS"
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -51,9 +53,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "bd51e6e4-3af5-43ca-96c5-7d907b87bb22"
+        "projectId": "69b56bda-4003-4e70-a488-e66015cb2856"
       }
     },
-    "owner": "droman2684"
+    "owner": "empirepodcastss-team"
   }
 }
