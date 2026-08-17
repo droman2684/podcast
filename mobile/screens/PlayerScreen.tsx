@@ -300,21 +300,26 @@ const styles = StyleSheet.create({
   tabletBody: { flex: 1, flexDirection: 'row' },
   tabletLeft: { flex: 1 },
   tabletLeftContent: { alignItems: 'center', paddingHorizontal: 32, paddingBottom: 40 },
+  // Narrower than the spec's original 372pt — the main Now Playing content
+  // (artwork/controls/scrubber) is what people actually look at while
+  // something's playing, so it gets priority over the Up Next rail. Row
+  // titles there already truncate to one line, so a tighter column just
+  // means more truncation, not lost information.
   tabletRight: {
-    width: 372,
+    width: 260,
     borderLeftWidth: StyleSheet.hairlineWidth,
     borderLeftColor: colors.border,
-    padding: 24
+    padding: 20
   },
   podcastNameTablet: { fontSize: 14, color: colors.textMuted, marginTop: 20, textAlign: 'center' },
   titleTablet: {
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '700',
     marginTop: 6,
     marginBottom: 24,
     textAlign: 'center',
     color: colors.textPrimary,
-    maxWidth: 460
+    maxWidth: 560
   },
   controlsTablet: {
     flexDirection: 'row',
