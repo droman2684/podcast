@@ -20,21 +20,30 @@ export default function CategoriesScreen({ onBack, onOpenCategory }: Props): Rea
   const deleteCategory = useStore((s) => s.deleteCategory)
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleCreate = async (): Promise<void> => {
     const trimmed = name.trim()
     if (!trimmed) return
     setCreating(true)
+    setError(null)
     try {
       await createCategory(trimmed)
       setName('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
     } finally {
       setCreating(false)
     }
   }
 
+  const handleDelete = (stationId: string): void => {
+    setError(null)
+    deleteCategory(stationId).catch((err) => setError(err instanceof Error ? err.message : String(err)))
+  }
+
   const renderItem = ({ item }: { item: Station }): React.JSX.Element => (
-    <SwipeToDelete deleteLabel="Delete" onDelete={() => deleteCategory(item.id)}>
+    <SwipeToDelete deleteLabel="Delete" onDelete={() => handleDelete(item.id)}>
       <Pressable style={styles.row} onPress={() => onOpenCategory(item.id)}>
         <View style={{ flex: 1 }}>
           <Text style={styles.rowName}>{item.name}</Text>
@@ -54,6 +63,8 @@ export default function CategoriesScreen({ onBack, onOpenCategory }: Props): Rea
       </Pressable>
       <Text style={styles.title}>Categories</Text>
 
+      {error && <Text style={styles.error}>{error}</Text>}
+
       <View style={styles.createRow}>
         <TextInput
           style={styles.input}
@@ -63,7 +74,11 @@ export default function CategoriesScreen({ onBack, onOpenCategory }: Props): Rea
           onSubmitEditing={handleCreate}
           returnKeyType="done"
         />
-        <Pressable style={styles.createBtn} onPress={() => !creating && handleCreate()}>
+        <Pressable
+          style={styles.createBtn}
+          onPress={() => !creating && handleCreate()}
+          accessibilityLabel="Add category"
+        >
           <Text style={styles.createBtnText}>{creating ? '…' : 'Add'}</Text>
         </Pressable>
       </View>
@@ -103,6 +118,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center'
   },
   createBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  error: { color: colors.danger, fontSize: 12, paddingHorizontal: 20, marginBottom: 8 },
   listContent: { paddingHorizontal: 20, gap: 8, paddingBottom: 20 },
   row: {
     flexDirection: 'row',

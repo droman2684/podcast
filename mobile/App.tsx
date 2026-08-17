@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, ActivityIndicator } from 'react-native'
 import { StatusBar } from 'expo-status-bar'
 import { useStore } from './state/store'
+import { buildEpisodeIndex } from './lib/episodeIndex'
 import SignInScreen from './screens/SignInScreen'
 import LibraryScreen from './screens/LibraryScreen'
 import EpisodeListScreen from './screens/EpisodeListScreen'
@@ -56,6 +57,11 @@ export default function App(): React.JSX.Element {
   // Drives the whole iPad adaptation. Called unconditionally, above the
   // authLoading/signedIn early returns, so hook order stays stable.
   const { mode, isTablet } = useLayout()
+  // Used to resolve the Player screen's episode from the live
+  // currentEpisodeId rather than the route's (possibly stale) episodeId —
+  // see the player branch below. Same unconditional-hooks reasoning as
+  // useLayout above.
+  const episodeIndex = useMemo(() => buildEpisodeIndex(episodesByPodcast), [episodesByPodcast])
 
   useEffect(() => {
     initAuth()
@@ -184,8 +190,18 @@ export default function App(): React.JSX.Element {
       <CategoriesScreen onBack={goToTabs} onOpenCategory={goToCategoryDetail} />
     )
   } else {
-    const podcast = podcasts.find((p) => p.id === route.podcastId)
-    const episode = episodesByPodcast[route.podcastId]?.find((e) => e.id === route.episodeId)
+    // Resolves from the live currentEpisodeId rather than the route's own
+    // episodeId — the route params only reflect what was true at the
+    // moment Player was opened. Once the queue auto-advances (AudioEngine's
+    // finish handler calls loadEpisode() directly, without going through
+    // this component's navigation), currentEpisodeId is what's actually
+    // playing; falling back to route.episodeId only covers the moment
+    // before that first assignment.
+    const activeEpisodeId = currentEpisodeId ?? route.episodeId
+    const episode = episodeIndex.get(activeEpisodeId)
+    const podcast = episode
+      ? podcasts.find((p) => p.id === episode.podcastId)
+      : podcasts.find((p) => p.id === route.podcastId)
     screen =
       podcast && episode ? (
         <PlayerScreen episode={episode} podcast={podcast} onBack={goBackFromPlayer} />

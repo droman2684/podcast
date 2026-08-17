@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { View, Text, Pressable, Switch, StyleSheet } from 'react-native'
+import { View, Text, Pressable, Switch, Alert, StyleSheet } from 'react-native'
 import type { Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
@@ -18,17 +18,52 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
   const markAllPlayed = useStore((s) => s.markAllPlayed)
   const [unsubscribing, setUnsubscribing] = useState(false)
   const [markingPlayed, setMarkingPlayed] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleUnsubscribe = async (): Promise<void> => {
     setUnsubscribing(true)
-    await unsubscribe(podcast.id)
-    onUnsubscribed()
+    setError(null)
+    try {
+      await unsubscribe(podcast.id)
+      onUnsubscribed()
+    } catch (err) {
+      // A finally block resets the button either way, but the explicit
+      // catch keeps the failure visible instead of just quietly retrying
+      // to look "normal" — markingPlayed had the same gap before this.
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setUnsubscribing(false)
+    }
+  }
+
+  const confirmUnsubscribe = (): void => {
+    Alert.alert('Unsubscribe', `Unsubscribe from ${podcast.name}? This removes it and its episodes from your library.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Unsubscribe', style: 'destructive', onPress: handleUnsubscribe }
+    ])
   }
 
   const handleMarkAllPlayed = async (): Promise<void> => {
     setMarkingPlayed(true)
-    await markAllPlayed(podcast.id)
-    setMarkingPlayed(false)
+    setError(null)
+    try {
+      await markAllPlayed(podcast.id)
+    } catch (err) {
+      // Previously had no catch/finally at all — a failed write here left
+      // the button stuck on "Marking…" forever with no way out.
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMarkingPlayed(false)
+    }
+  }
+
+  const handleNotifyToggle = async (value: boolean): Promise<void> => {
+    setError(null)
+    try {
+      await setNotify(podcast.id, value)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
   }
 
   return (
@@ -44,11 +79,17 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
         </View>
       </View>
 
+      {error && <Text style={styles.error}>{error}</Text>}
+
       <Text style={styles.sectionTitle}>Notifications</Text>
       <View style={styles.card}>
         <View style={styles.row}>
           <Text style={styles.rowLabel}>Notify on new episodes</Text>
-          <Switch value={notify} onValueChange={(v) => setNotify(podcast.id, v)} />
+          <Switch
+            value={notify}
+            onValueChange={handleNotifyToggle}
+            accessibilityLabel="Notify on new episodes"
+          />
         </View>
       </View>
 
@@ -57,6 +98,7 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
         <Pressable
           style={styles.actionRow}
           onPress={() => !markingPlayed && handleMarkAllPlayed()}
+          accessibilityLabel="Mark all episodes as played"
         >
           <Text style={styles.actionText}>
             {markingPlayed ? 'Marking…' : 'Mark all episodes as played'}
@@ -64,7 +106,11 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
         </Pressable>
       </View>
 
-      <Pressable style={styles.dangerRow} onPress={() => !unsubscribing && handleUnsubscribe()}>
+      <Pressable
+        style={styles.dangerRow}
+        onPress={() => !unsubscribing && confirmUnsubscribe()}
+        accessibilityLabel={`Unsubscribe from ${podcast.name}`}
+      >
         <Text style={styles.dangerText}>
           {unsubscribing ? 'Unsubscribing…' : `Unsubscribe from ${podcast.name}`}
         </Text>
@@ -79,6 +125,7 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24 },
   name: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
   author: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+  error: { color: colors.danger, fontSize: 12, marginBottom: 16 },
   sectionTitle: {
     fontSize: 11,
     fontWeight: '600',

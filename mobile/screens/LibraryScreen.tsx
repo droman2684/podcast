@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { View, Text, FlatList, ScrollView, Pressable, StyleSheet, ActivityIndicator } from 'react-native'
+import { View, Text, FlatList, ScrollView, Pressable, Alert, StyleSheet, ActivityIndicator } from 'react-native'
 import { Grid2x2, List, Tags, ChevronRight, Settings } from 'lucide-react-native'
 import type { Podcast } from '@shared/types'
 import { useStore } from '../state/store'
@@ -62,8 +62,24 @@ export default function LibraryScreen({
   // feed on every tab visit was the main source of the app feeling slow.
   // Pull-to-refresh below still re-fetches on demand.
 
+  const confirmUnsubscribe = (podcast: Podcast): void => {
+    Alert.alert('Unsubscribe', `Unsubscribe from ${podcast.name}?`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Unsubscribe', style: 'destructive', onPress: () => unsubscribe(podcast.id) }
+    ])
+  }
+
+  // Grid has no swipe gesture (rows don't apply to a multi-column layout),
+  // so it had no way to unsubscribe at all — a long-press with a confirm
+  // is the standard mobile equivalent of List's swipe-to-delete here.
   const renderGridItem = ({ item }: { item: Podcast }): React.JSX.Element => (
-    <Pressable style={styles.gridCard} onPress={() => onSelectPodcast(item.id)}>
+    <Pressable
+      style={styles.gridCard}
+      onPress={() => onSelectPodcast(item.id)}
+      onLongPress={() => confirmUnsubscribe(item)}
+      accessibilityLabel={item.name}
+      accessibilityHint="Double tap to open. Long press to unsubscribe."
+    >
       <View>
         <Artwork url={item.customArtworkUrl ?? item.artworkUrl} size={GRID_ART_SIZE} radius={radii.artworkSm} />
         {item.unread > 0 && (
@@ -98,7 +114,7 @@ export default function LibraryScreen({
             <Text style={styles.gridBadgeText}>{item.unread}</Text>
           </View>
         )}
-        <Pressable hitSlop={10} onPress={() => onOpenSettings(item.id)}>
+        <Pressable hitSlop={10} onPress={() => onOpenSettings(item.id)} accessibilityLabel={`${item.name} settings`}>
           <ChevronRight size={16} color={colors.textDisabled} />
         </Pressable>
       </Pressable>
@@ -109,7 +125,7 @@ export default function LibraryScreen({
     <View style={styles.container}>
       <View style={styles.header}>
         <Text style={styles.title}>Library</Text>
-        <Pressable hitSlop={10} onPress={onOpenAppSettings}>
+        <Pressable hitSlop={10} onPress={onOpenAppSettings} accessibilityLabel="Settings">
           <Settings size={20} color={colors.textMuted} />
         </Pressable>
       </View>
@@ -118,18 +134,21 @@ export default function LibraryScreen({
           <Pressable
             style={[styles.toggleBtn, view === 'grid' && styles.toggleBtnActive]}
             onPress={() => setView('grid')}
+            accessibilityLabel="Grid view"
           >
             <Grid2x2 size={14} color={view === 'grid' ? colors.accent : colors.textPlaceholder} />
           </Pressable>
           <Pressable
             style={[styles.toggleBtn, view === 'list' && styles.toggleBtnActive]}
             onPress={() => setView('list')}
+            accessibilityLabel="List view"
           >
             <List size={14} color={view === 'list' ? colors.accent : colors.textPlaceholder} />
           </Pressable>
           <Pressable
             style={[styles.toggleBtn, view === 'category' && styles.toggleBtnActive]}
             onPress={() => setView('category')}
+            accessibilityLabel="Category view"
           >
             <Tags size={14} color={view === 'category' ? colors.accent : colors.textPlaceholder} />
           </Pressable>
@@ -189,7 +208,7 @@ function EmptyState({ loading }: { loading: boolean }): React.JSX.Element {
   if (loading) return <ActivityIndicator style={{ marginTop: 40 }} />
   return (
     <Text style={styles.empty}>
-      No synced subscriptions found yet. Subscribe on desktop or from the Search tab, then pull
+      No synced subscriptions found yet. Subscribe on desktop or from the Discover tab, then pull
       down to refresh here.
     </Text>
   )

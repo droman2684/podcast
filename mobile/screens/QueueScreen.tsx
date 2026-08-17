@@ -108,7 +108,7 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
     return (
       <View style={[styles.row, isActive && styles.rowActive]}>
         {dragHandlers && (
-          <View style={styles.gripHandle} hitSlop={12} {...dragHandlers}>
+          <View style={styles.gripHandle} hitSlop={12} accessibilityLabel="Drag to reorder" {...dragHandlers}>
             <GripVertical size={18} color={colors.textDisabled} />
           </View>
         )}
@@ -144,6 +144,7 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
           hitSlop={10}
           disabled={downloading}
           onPress={() => (downloaded ? removeDownload(item.episode.id) : downloadEpisode(item.episode))}
+          accessibilityLabel={downloaded ? 'Remove download' : 'Download episode'}
         >
           {downloading ? (
             <ActivityIndicator size="small" color={colors.textMuted} />
@@ -153,10 +154,14 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
             <Download size={17} color={colors.textMuted} />
           )}
         </Pressable>
-        <Pressable hitSlop={10} onPress={() => setDetailItem(item)}>
+        <Pressable hitSlop={10} onPress={() => setDetailItem(item)} accessibilityLabel="Episode details">
           <Info size={17} color={colors.textMuted} />
         </Pressable>
-        <Pressable hitSlop={10} onPress={() => handlePlayToggle(item.podcast.id, item.episode.id)}>
+        <Pressable
+          hitSlop={10}
+          onPress={() => handlePlayToggle(item.podcast.id, item.episode.id)}
+          accessibilityLabel={isCurrent && playing ? 'Pause' : 'Play'}
+        >
           {isCurrent && playing ? (
             <Pause size={18} color={colors.accent} fill={colors.accent} />
           ) : (
@@ -182,7 +187,7 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
       </View>
 
       {items.length === 0 ? (
-        <Text style={styles.empty}>Queue is empty. Add episodes from Home or any episode list.</Text>
+        <Text style={styles.empty}>Queue is empty. Add episodes from Library or Discover.</Text>
       ) : grouped ? (
         <ScrollView contentContainerStyle={styles.listContent}>
           {groupByPodcast(items.map((i) => i.episode)).map((group) => {
@@ -243,7 +248,7 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
                     </Text>
                     <Text style={styles.podcastName}>{detailItem.podcast.name}</Text>
                   </View>
-                  <Pressable hitSlop={10} onPress={() => setDetailItem(null)}>
+                  <Pressable hitSlop={10} onPress={() => setDetailItem(null)} accessibilityLabel="Close">
                     <X size={18} color={colors.textMuted} />
                   </Pressable>
                 </View>

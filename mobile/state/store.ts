@@ -125,6 +125,7 @@ interface AppState {
   initAuth: () => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
   signUp: (email: string, password: string) => Promise<void>
+  resetPassword: (email: string) => Promise<void>
   signOut: () => Promise<void>
 
   loadLibrary: () => Promise<void>
@@ -406,6 +407,16 @@ export const useStore = create<AppState>((set, get) => ({
     if (error) throw new Error(error.message)
   },
 
+  // Sends a recovery link via Supabase's own default flow — this app has no
+  // custom URL scheme registered to catch a redirect, so the link opens
+  // Supabase's own hosted reset page (or the redirect URL configured in the
+  // Supabase dashboard's Auth settings, if one's been set there); either
+  // way the password change happens in the browser, not back in the app.
+  resetPassword: async (email) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email)
+    if (error) throw new Error(error.message)
+  },
+
   signOut: async () => {
     await supabase.auth.signOut()
     set({
@@ -648,19 +659,28 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   setNotify: async (podcastId, notify) => {
+    const previous = get().podcastSettings[podcastId]?.notify ?? false
     set((state) => ({
       podcastSettings: { ...state.podcastSettings, [podcastId]: { notify } }
     }))
     const userId = await currentUserId()
     if (!userId) return
-    unwrap(
-      await supabase.from('podcast_settings').upsert({
-        user_id: userId,
-        podcast_id: podcastId,
-        notify,
-        updated_at: new Date().toISOString()
-      })
-    )
+    try {
+      unwrap(
+        await supabase.from('podcast_settings').upsert({
+          user_id: userId,
+          podcast_id: podcastId,
+          notify,
+          updated_at: new Date().toISOString()
+        })
+      )
+    } catch (err) {
+      console.error(`[notify] save failed for ${podcastId}:`, err)
+      set((state) => ({
+        podcastSettings: { ...state.podcastSettings, [podcastId]: { notify: previous } }
+      }))
+      throw err
+    }
   },
 
   savePosition: async (episodeId, positionSec) => {
@@ -726,17 +746,22 @@ export const useStore = create<AppState>((set, get) => ({
     const userId = await currentUserId()
     if (!userId) return
     const updatedAt = new Date().toISOString()
-    unwrap(
-      await supabase.from('episode_played').upsert(
-        unplayed.map((e) => ({
-          user_id: userId,
-          episode_id: e.id,
-          podcast_id: podcastId,
-          played: true,
-          updated_at: updatedAt
-        }))
+    try {
+      unwrap(
+        await supabase.from('episode_played').upsert(
+          unplayed.map((e) => ({
+            user_id: userId,
+            episode_id: e.id,
+            podcast_id: podcastId,
+            played: true,
+            updated_at: updatedAt
+          }))
+        )
       )
-    )
+    } catch (err) {
+      console.error(`[markAllPlayed] save failed for ${podcastId}:`, err)
+      throw err
+    }
 
     set((state) => {
       const updated = (state.episodesByPodcast[podcastId] ?? []).map((e) => ({ ...e, played: true }))
@@ -831,7 +856,12 @@ export const useStore = create<AppState>((set, get) => ({
     if (!userId) throw new Error('Not signed in')
     const id = await hashId(`${name}-${Date.now()}-${Math.random()}`)
     const station: Station = { id, name, podcastIds: [], sortBy: 'newest', episodesPerShow: 5 }
-    await upsertStation(userId, station)
+    try {
+      await upsertStation(userId, station)
+    } catch (err) {
+      console.error(`[categories] create failed for "${name}":`, err)
+      throw err
+    }
     set((state) => ({ stations: [...state.stations, station] }))
     return station
   },
@@ -842,16 +872,30 @@ export const useStore = create<AppState>((set, get) => ({
     const station = get().stations.find((s) => s.id === stationId)
     if (!station) return
     const updated: Station = { ...station, name }
+    try {
+      await upsertStation(userId, updated)
+    } catch (err) {
+      console.error(`[categories] rename failed for ${stationId}:`, err)
+      throw err
+    }
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
-    await upsertStation(userId, updated)
   },
 
   deleteCategory: async (stationId) => {
     const userId = await currentUserId()
     if (!userId) return
+    const previous = get().stations
     set((state) => ({ stations: state.stations.filter((s) => s.id !== stationId) }))
     const now = new Date().toISOString()
-    unwrap(await supabase.from('stations').upsert({ user_id: userId, id: stationId, deleted_at: now, updated_at: now }))
+    try {
+      unwrap(
+        await supabase.from('stations').upsert({ user_id: userId, id: stationId, deleted_at: now, updated_at: now })
+      )
+    } catch (err) {
+      console.error(`[categories] delete failed for ${stationId}:`, err)
+      set({ stations: previous })
+      throw err
+    }
   },
 
   addPodcastToCategory: async (stationId, podcastId) => {
@@ -861,7 +905,12 @@ export const useStore = create<AppState>((set, get) => ({
     if (!station || station.podcastIds.includes(podcastId)) return
     const updated: Station = { ...station, podcastIds: [...station.podcastIds, podcastId] }
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
-    await upsertStation(userId, updated)
+    try {
+      await upsertStation(userId, updated)
+    } catch (err) {
+      console.error(`[categories] add podcast failed for ${stationId}:`, err)
+      throw err
+    }
   },
 
   removePodcastFromCategory: async (stationId, podcastId) => {
@@ -871,7 +920,12 @@ export const useStore = create<AppState>((set, get) => ({
     if (!station) return
     const updated: Station = { ...station, podcastIds: station.podcastIds.filter((id) => id !== podcastId) }
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
-    await upsertStation(userId, updated)
+    try {
+      await upsertStation(userId, updated)
+    } catch (err) {
+      console.error(`[categories] remove podcast failed for ${stationId}:`, err)
+      throw err
+    }
   },
 
   loadEpisode: (episodeId, opts) => {

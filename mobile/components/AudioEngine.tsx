@@ -1,18 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio'
-import type { Episode } from '@shared/types'
 import { useStore } from '../state/store'
 import { removeFromQueueOnFinish } from '../lib/queueHelpers'
+import { buildEpisodeIndex } from '../lib/episodeIndex'
 
 const SAVE_INTERVAL_MS = 5000
-
-function findEpisode(episodesByPodcast: Record<string, Episode[]>, id: string): Episode | null {
-  for (const episodes of Object.values(episodesByPodcast)) {
-    const found = episodes.find((e) => e.id === id)
-    if (found) return found
-  }
-  return null
-}
 
 // One persistent player for the whole app, mounted once here rather than
 // inside PlayerScreen — mirrors the desktop app's useAudioEngine.ts pattern.
@@ -36,7 +28,8 @@ export default function AudioEngine(): null {
   const setPlaybackTime = useStore((s) => s.setPlaybackTime)
   const loadEpisode = useStore((s) => s.loadEpisode)
 
-  const episode = currentEpisodeId ? findEpisode(episodesByPodcast, currentEpisodeId) : null
+  const episodeIndex = useMemo(() => buildEpisodeIndex(episodesByPodcast), [episodesByPodcast])
+  const episode = currentEpisodeId ? (episodeIndex.get(currentEpisodeId) ?? null) : null
   const podcast = episode ? podcasts.find((p) => p.id === episode.podcastId) : null
 
   const player = useAudioPlayer(null)

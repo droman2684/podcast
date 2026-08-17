@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from 'react-native'
-import { Settings, ChevronDown, ChevronUp, Download, Trash2 } from 'lucide-react-native'
+import { Settings, ChevronDown, ChevronUp, Download, Trash2, ListPlus, Check, RotateCcw } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
@@ -56,13 +56,34 @@ function EpisodeRow({
             {episode.played ? ' · Played' : position > 0 ? ` · ${formatDuration(position)} in` : ''}
           </Text>
         </View>
-        <Pressable hitSlop={10} onPress={onToggleQueue}>
-          <Text style={[styles.iconBtn, queued && styles.iconBtnActive]}>{queued ? '✓' : '+'}</Text>
+        <Pressable
+          hitSlop={10}
+          onPress={onToggleQueue}
+          accessibilityLabel={queued ? 'Remove from queue' : 'Add to queue'}
+        >
+          {queued ? (
+            <Check size={16} color={colors.accent} strokeWidth={3} />
+          ) : (
+            <ListPlus size={16} color={colors.textMuted} />
+          )}
         </Pressable>
-        <Pressable hitSlop={10} onPress={onTogglePlayed}>
-          <Text style={styles.iconBtn}>{episode.played ? '↺' : '✓'}</Text>
+        <Pressable
+          hitSlop={10}
+          onPress={onTogglePlayed}
+          accessibilityLabel={episode.played ? 'Mark as unplayed' : 'Mark as played'}
+        >
+          {episode.played ? (
+            <RotateCcw size={16} color={colors.textMuted} />
+          ) : (
+            <Check size={16} color={colors.textMuted} />
+          )}
         </Pressable>
-        <Pressable hitSlop={10} onPress={onToggleDownload} disabled={downloading}>
+        <Pressable
+          hitSlop={10}
+          onPress={onToggleDownload}
+          disabled={downloading}
+          accessibilityLabel={downloaded ? 'Remove download' : 'Download episode'}
+        >
           {downloading ? (
             <ActivityIndicator size="small" color={colors.textMuted} />
           ) : downloaded ? (
@@ -106,6 +127,8 @@ export default function EpisodeListScreen({ podcast, onBack, onPlay, onOpenSetti
   const downloadingIds = useStore((s) => s.downloadingIds)
   const downloadEpisode = useStore((s) => s.downloadEpisode)
   const removeDownload = useStore((s) => s.removeDownload)
+  const libraryLoading = useStore((s) => s.libraryLoading)
+  const loadLibrary = useStore((s) => s.loadLibrary)
 
   return (
     <View style={styles.container}>
@@ -117,7 +140,7 @@ export default function EpisodeListScreen({ podcast, onBack, onPlay, onOpenSetti
           <Text style={styles.title} numberOfLines={1}>
             {podcast.name}
           </Text>
-          <Pressable hitSlop={10} onPress={() => onOpenSettings(podcast.id)}>
+          <Pressable hitSlop={10} onPress={() => onOpenSettings(podcast.id)} accessibilityLabel="Podcast settings">
             <Settings size={18} color={colors.textMuted} />
           </Pressable>
         </View>
@@ -126,6 +149,8 @@ export default function EpisodeListScreen({ podcast, onBack, onPlay, onOpenSetti
         data={episodes}
         keyExtractor={(e) => e.id}
         contentContainerStyle={styles.listContent}
+        onRefresh={loadLibrary}
+        refreshing={libraryLoading}
         renderItem={({ item }) => (
           <EpisodeRow
             episode={item}
@@ -167,19 +192,6 @@ const styles = StyleSheet.create({
   },
   epTitle: { fontSize: 14, fontWeight: '600', color: colors.textPrimary },
   epMeta: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
-  iconBtn: {
-    fontSize: 16,
-    color: colors.textMuted,
-    fontWeight: '700',
-    width: 26,
-    height: 26,
-    textAlign: 'center',
-    lineHeight: 26,
-    borderRadius: 13,
-    backgroundColor: '#f0f0f0',
-    overflow: 'hidden'
-  },
-  iconBtnActive: { color: '#fff', backgroundColor: colors.accent },
   descToggle: {
     flexDirection: 'row',
     alignItems: 'flex-start',

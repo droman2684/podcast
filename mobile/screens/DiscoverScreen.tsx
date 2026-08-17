@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { View, Text, TextInput, ScrollView, FlatList, Pressable, StyleSheet, ActivityIndicator } from 'react-native'
 import { Search, X } from 'lucide-react-native'
 import type { DiscoverPodcast } from '@shared/types'
@@ -28,7 +28,10 @@ export default function DiscoverScreen(): React.JSX.Element {
   const [searchResults, setSearchResults] = useState<DiscoverPodcast[]>([])
   const [searching, setSearching] = useState(false)
   const [searchError, setSearchError] = useState<string | null>(null)
+  const [hasSearched, setHasSearched] = useState(false)
+  const [subscribeError, setSubscribeError] = useState<string | null>(null)
   const searchActive = term.trim().length > 0
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
     getPodcastOfTheDay()
@@ -61,13 +64,32 @@ export default function DiscoverScreen(): React.JSX.Element {
       setSearchError(err instanceof Error ? err.message : String(err))
     } finally {
       setSearching(false)
+      setHasSearched(true)
     }
   }
 
+  // Debounced so results update as you type (not just on submit), without
+  // firing a request per keystroke.
+  useEffect(() => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    if (!term.trim()) {
+      setHasSearched(false)
+      return
+    }
+    searchDebounceRef.current = setTimeout(runSearch, 450)
+    return () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [term])
+
   const handleSubscribe = async (podcast: DiscoverPodcast): Promise<void> => {
     setSubscribingId(podcast.id)
+    setSubscribeError(null)
     try {
       await subscribe(podcast)
+    } catch (err) {
+      setSubscribeError(err instanceof Error ? err.message : String(err))
     } finally {
       setSubscribingId(null)
     }
@@ -114,9 +136,11 @@ export default function DiscoverScreen(): React.JSX.Element {
         {searchActive && (
           <Pressable
             hitSlop={10}
+            accessibilityLabel="Clear search"
             onPress={() => {
               setTerm('')
               setSearchResults([])
+              setHasSearched(false)
             }}
           >
             <X size={16} color={colors.textPlaceholder} />
@@ -124,10 +148,15 @@ export default function DiscoverScreen(): React.JSX.Element {
         )}
       </View>
 
+      {subscribeError && <Text style={styles.error}>{subscribeError}</Text>}
+
       {searchActive ? (
         <>
           {searching && <ActivityIndicator style={{ marginTop: 20 }} />}
           {searchError && <Text style={styles.error}>{searchError}</Text>}
+          {!searching && hasSearched && !searchError && searchResults.length === 0 && (
+            <Text style={styles.empty}>No results found for "{term.trim()}".</Text>
+          )}
           <FlatList
             data={searchResults}
             keyExtractor={(p) => p.id}
@@ -214,6 +243,7 @@ const styles = StyleSheet.create({
   },
   searchInput: { flex: 1, paddingVertical: 10, fontSize: 15 },
   error: { color: colors.danger, paddingHorizontal: 20, marginBottom: 8 },
+  empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40, paddingHorizontal: 30 },
   searchContent: { paddingHorizontal: 20, paddingBottom: 20 },
   row: {
     flexDirection: 'row',

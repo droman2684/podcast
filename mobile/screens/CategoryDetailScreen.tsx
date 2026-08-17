@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { View, Text, TextInput, FlatList, Pressable, StyleSheet } from 'react-native'
+import { View, Text, TextInput, FlatList, Pressable, Alert, StyleSheet } from 'react-native'
 import { Check } from 'lucide-react-native'
 import type { Podcast, Station } from '@shared/types'
 import { useStore } from '../state/store'
@@ -19,18 +19,45 @@ export default function CategoryDetailScreen({ station, onBack, onDeleted }: Pro
   const addPodcastToCategory = useStore((s) => s.addPodcastToCategory)
   const removePodcastFromCategory = useStore((s) => s.removePodcastFromCategory)
   const [name, setName] = useState(station.name)
+  const [error, setError] = useState<string | null>(null)
 
   const memberIds = new Set(station.podcastIds)
 
   const handleRenameBlur = (): void => {
     const trimmed = name.trim()
-    if (trimmed && trimmed !== station.name) renameCategory(station.id, trimmed)
-    else setName(station.name)
+    if (trimmed && trimmed !== station.name) {
+      setError(null)
+      renameCategory(station.id, trimmed).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err))
+      )
+    } else {
+      setName(station.name)
+    }
   }
 
   const handleDelete = async (): Promise<void> => {
-    await deleteCategory(station.id)
-    onDeleted()
+    setError(null)
+    try {
+      await deleteCategory(station.id)
+      onDeleted()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const confirmDelete = (): void => {
+    Alert.alert('Delete Category', `Delete "${station.name}"? This can't be undone.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Delete', style: 'destructive', onPress: handleDelete }
+    ])
+  }
+
+  const toggleMember = (podcastId: string, included: boolean): void => {
+    setError(null)
+    const action = included
+      ? removePodcastFromCategory(station.id, podcastId)
+      : addPodcastToCategory(station.id, podcastId)
+    action.catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }
 
   const renderItem = ({ item }: { item: Podcast }): React.JSX.Element => {
@@ -38,9 +65,8 @@ export default function CategoryDetailScreen({ station, onBack, onDeleted }: Pro
     return (
       <Pressable
         style={styles.row}
-        onPress={() =>
-          included ? removePodcastFromCategory(station.id, item.id) : addPodcastToCategory(station.id, item.id)
-        }
+        onPress={() => toggleMember(item.id, included)}
+        accessibilityLabel={`${included ? 'Remove' : 'Add'} ${item.name} ${included ? 'from' : 'to'} category`}
       >
         <Artwork url={item.customArtworkUrl ?? item.artworkUrl} size={40} radius={radii.artworkSm} />
         <Text style={styles.rowName} numberOfLines={1}>
@@ -59,6 +85,8 @@ export default function CategoryDetailScreen({ station, onBack, onDeleted }: Pro
         <Text style={styles.back}>{'‹ Categories'}</Text>
       </Pressable>
 
+      {error && <Text style={styles.error}>{error}</Text>}
+
       <TextInput
         style={styles.nameInput}
         value={name}
@@ -66,6 +94,7 @@ export default function CategoryDetailScreen({ station, onBack, onDeleted }: Pro
         onBlur={handleRenameBlur}
         onSubmitEditing={handleRenameBlur}
         returnKeyType="done"
+        accessibilityLabel="Category name"
       />
 
       <Text style={styles.sectionTitle}>Shows in this category</Text>
@@ -74,10 +103,10 @@ export default function CategoryDetailScreen({ station, onBack, onDeleted }: Pro
         keyExtractor={(p) => p.id}
         contentContainerStyle={styles.listContent}
         renderItem={renderItem}
-        ListEmptyComponent={<Text style={styles.empty}>Subscribe to shows from Search to add them here.</Text>}
+        ListEmptyComponent={<Text style={styles.empty}>Subscribe to shows from Discover to add them here.</Text>}
       />
 
-      <Pressable style={styles.dangerRow} onPress={handleDelete}>
+      <Pressable style={styles.dangerRow} onPress={confirmDelete} accessibilityLabel="Delete category">
         <Text style={styles.dangerText}>Delete Category</Text>
       </Pressable>
     </View>
@@ -87,6 +116,7 @@ export default function CategoryDetailScreen({ station, onBack, onDeleted }: Pro
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
   back: { color: colors.accent, marginBottom: 12, fontSize: 15, paddingHorizontal: 20 },
+  error: { color: colors.danger, fontSize: 12, paddingHorizontal: 20, marginBottom: 8 },
   nameInput: {
     fontSize: 22,
     fontWeight: '700',

@@ -58,14 +58,14 @@ export default function SettingsScreen({ onBack }: Props): React.JSX.Element {
       <Text style={styles.sectionTitle}>Default library view</Text>
       <View style={styles.card}>
         <View style={styles.optionRow}>
-          {(['grid', 'list'] as LibraryView[]).map((view) => (
+          {(['grid', 'list', 'category'] as LibraryView[]).map((view) => (
             <Pressable
               key={view}
               style={[styles.option, { flex: 1 }, defaultLibraryView === view && styles.optionActive]}
               onPress={() => setDefaultLibraryView(view)}
             >
               <Text style={[styles.optionText, defaultLibraryView === view && styles.optionTextActive]}>
-                {view === 'grid' ? 'Card' : 'List'}
+                {view === 'grid' ? 'Card' : view === 'list' ? 'List' : 'Category'}
               </Text>
             </Pressable>
           ))}

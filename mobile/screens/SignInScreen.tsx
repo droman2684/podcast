@@ -6,18 +6,39 @@ import { colors, radii } from '../theme'
 export default function SignInScreen(): React.JSX.Element {
   const signIn = useStore((s) => s.signIn)
   const signUp = useStore((s) => s.signUp)
+  const resetPassword = useStore((s) => s.resetPassword)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [resetMessage, setResetMessage] = useState<string | null>(null)
 
   const handle = async (action: 'signIn' | 'signUp'): Promise<void> => {
     if (!email.trim() || !password) return
     setBusy(true)
     setError(null)
+    setResetMessage(null)
     try {
       if (action === 'signIn') await signIn(email.trim(), password)
       else await signUp(email.trim(), password)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const handleForgotPassword = async (): Promise<void> => {
+    if (!email.trim()) {
+      setError('Enter your email above first, then tap "Forgot password?" again.')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    setResetMessage(null)
+    try {
+      await resetPassword(email.trim())
+      setResetMessage(`Check ${email.trim()} for a password reset link.`)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -44,6 +65,7 @@ export default function SignInScreen(): React.JSX.Element {
         onChangeText={setPassword}
       />
       {error && <Text style={styles.error}>{error}</Text>}
+      {resetMessage && <Text style={styles.success}>{resetMessage}</Text>}
       {busy ? (
         <ActivityIndicator />
       ) : (
@@ -53,6 +75,9 @@ export default function SignInScreen(): React.JSX.Element {
           </Pressable>
           <Pressable style={[styles.button, styles.secondary]} onPress={() => handle('signUp')}>
             <Text style={styles.buttonText}>Create account</Text>
+          </Pressable>
+          <Pressable onPress={handleForgotPassword}>
+            <Text style={styles.forgotLink}>Forgot password?</Text>
           </Pressable>
           <Text style={styles.helper}>
             Use the same email + password as your desktop Empire Pod account.
@@ -76,6 +101,7 @@ const styles = StyleSheet.create({
     fontSize: 16
   },
   error: { color: colors.danger, marginBottom: 12 },
+  success: { color: colors.accent, marginBottom: 12 },
   button: {
     backgroundColor: colors.accent,
     borderRadius: radii.input,
@@ -85,5 +111,6 @@ const styles = StyleSheet.create({
   },
   secondary: { backgroundColor: colors.navInactive },
   buttonText: { color: '#fff', fontWeight: '600', fontSize: 16 },
-  helper: { textAlign: 'center', color: colors.textMuted, fontSize: 12, marginTop: 8 }
+  forgotLink: { textAlign: 'center', color: colors.accent, fontSize: 13, fontWeight: '600', marginTop: 4 },
+  helper: { textAlign: 'center', color: colors.textMuted, fontSize: 12, marginTop: 12 }
 })
