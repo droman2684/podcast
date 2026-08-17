@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { View, Text, FlatList, ScrollView, Pressable, Alert, StyleSheet, ActivityIndicator } from 'react-native'
-import { Grid2x2, List, Tags, ChevronRight, Settings } from 'lucide-react-native'
+import { Grid2x2, List, Tags, ChevronRight, Settings, MoreVertical } from 'lucide-react-native'
 import type { Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
@@ -69,9 +69,10 @@ export default function LibraryScreen({
     ])
   }
 
-  // Grid has no swipe gesture (rows don't apply to a multi-column layout),
-  // so it had no way to unsubscribe at all — a long-press with a confirm
-  // is the standard mobile equivalent of List's swipe-to-delete here.
+  // Grid has no swipe gesture (rows don't apply to a multi-column layout).
+  // Long-press still works as a shortcut, but a gesture with zero on-screen
+  // hint is one most people never discover — the "•••" button is the
+  // visible, discoverable path to the same confirm dialog.
   const renderGridItem = ({ item }: { item: Podcast }): React.JSX.Element => (
     <Pressable
       style={styles.gridCard}
@@ -87,6 +88,17 @@ export default function LibraryScreen({
             <Text style={styles.gridBadgeText}>{item.unread}</Text>
           </View>
         )}
+        <Pressable
+          style={styles.gridMoreBtn}
+          hitSlop={8}
+          onPress={(e) => {
+            e.stopPropagation()
+            confirmUnsubscribe(item)
+          }}
+          accessibilityLabel={`More options for ${item.name}`}
+        >
+          <MoreVertical size={13} color="#fff" />
+        </Pressable>
       </View>
       <Text style={styles.gridName} numberOfLines={2}>
         {item.name}
@@ -153,8 +165,9 @@ export default function LibraryScreen({
             <Tags size={14} color={view === 'category' ? colors.accent : colors.textPlaceholder} />
           </Pressable>
         </View>
-        <Pressable onPress={onManageCategories}>
-          <Text style={styles.manageLink}>Manage categories</Text>
+        <Pressable style={styles.manageBtn} onPress={onManageCategories}>
+          <Tags size={13} color={colors.accent} />
+          <Text style={styles.manageLink}>Categories</Text>
         </Pressable>
       </View>
       {error && <Text style={styles.error}>{error}</Text>}
@@ -236,6 +249,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: SCREEN_PADDING,
     marginBottom: 16
   },
+  manageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radii.pill,
+    backgroundColor: colors.accentBg
+  },
   manageLink: { fontSize: 12.5, fontWeight: '600', color: colors.accent },
   toggle: {
     flexDirection: 'row',
@@ -261,6 +283,17 @@ const styles = StyleSheet.create({
     paddingVertical: 2
   },
   gridBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+  gridMoreBtn: {
+    position: 'absolute',
+    bottom: 6,
+    right: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
   gridName: { fontSize: 13, fontWeight: '600', color: colors.textPrimary, marginTop: 8 },
   gridAuthor: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
 

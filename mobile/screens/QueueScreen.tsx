@@ -26,6 +26,8 @@ interface QueueItem {
 
 interface Props {
   onPlay: (podcastId: string, episodeId: string, autoplay?: boolean) => void
+  onBrowseLibrary: () => void
+  onBrowseDiscover: () => void
 }
 
 const ROW_SLOT_HEIGHT = 84
@@ -39,7 +41,7 @@ function formatRemaining(durationSec: number, positionSec: number): string {
   return m > 0 ? `${m}m left` : '<1m left'
 }
 
-export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
+export default function QueueScreen({ onPlay, onBrowseLibrary, onBrowseDiscover }: Props): React.JSX.Element {
   const queue = useStore((s) => s.queue)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
@@ -48,6 +50,8 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
   const currentEpisodeId = useStore((s) => s.currentEpisodeId)
   const playing = useStore((s) => s.playing)
   const currentTimeSec = useStore((s) => s.currentTimeSec)
+  const libraryLoading = useStore((s) => s.libraryLoading)
+  const libraryLoaded = useStore((s) => s.libraryLoaded)
   const positions = useStore((s) => s.positions)
   const loadEpisode = useStore((s) => s.loadEpisode)
   const togglePlay = useStore((s) => s.togglePlay)
@@ -187,7 +191,13 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
       </View>
 
       {items.length === 0 ? (
-        <Text style={styles.empty}>Queue is empty. Add episodes from Library or Discover.</Text>
+        <EmptyQueueState
+          libraryLoading={libraryLoading}
+          libraryLoaded={libraryLoaded}
+          hasSubscriptions={podcasts.length > 0}
+          onBrowseLibrary={onBrowseLibrary}
+          onBrowseDiscover={onBrowseDiscover}
+        />
       ) : grouped ? (
         <ScrollView contentContainerStyle={styles.listContent}>
           {groupByPodcast(items.map((i) => i.episode)).map((group) => {
@@ -266,6 +276,57 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
   )
 }
 
+interface EmptyQueueStateProps {
+  libraryLoading: boolean
+  libraryLoaded: boolean
+  hasSubscriptions: boolean
+  onBrowseLibrary: () => void
+  onBrowseDiscover: () => void
+}
+
+// Queue is the app's landing tab, so this is the very first thing every new
+// user sees — and it starts empty for everyone, since subscribing doesn't
+// queue anything. A bare sentence with no way forward undersold that
+// moment; this branches on what's actually true (still syncing vs. no
+// subscriptions yet vs. subscribed-but-nothing-queued) and gives a real
+// next step instead of "go figure it out yourself."
+function EmptyQueueState({
+  libraryLoading,
+  libraryLoaded,
+  hasSubscriptions,
+  onBrowseLibrary,
+  onBrowseDiscover
+}: EmptyQueueStateProps): React.JSX.Element {
+  if (libraryLoading && !libraryLoaded) {
+    return (
+      <View style={styles.emptyState}>
+        <ActivityIndicator />
+        <Text style={styles.emptyText}>Loading your library…</Text>
+      </View>
+    )
+  }
+
+  if (!hasSubscriptions) {
+    return (
+      <View style={styles.emptyState}>
+        <Text style={styles.emptyText}>You haven't subscribed to any shows yet.</Text>
+        <Pressable style={styles.emptyBtn} onPress={onBrowseDiscover}>
+          <Text style={styles.emptyBtnText}>Browse Discover</Text>
+        </Pressable>
+      </View>
+    )
+  }
+
+  return (
+    <View style={styles.emptyState}>
+      <Text style={styles.emptyText}>Queue is empty — add episodes from a show to get started.</Text>
+      <Pressable style={styles.emptyBtn} onPress={onBrowseLibrary}>
+        <Text style={styles.emptyBtnText}>Browse Library</Text>
+      </Pressable>
+    </View>
+  )
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60 },
   header: {
@@ -321,7 +382,15 @@ const styles = StyleSheet.create({
     marginTop: 6
   },
   progressFill: { height: '100%', backgroundColor: colors.accent },
-  empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40, paddingHorizontal: 30 },
+  emptyState: { alignItems: 'center', marginTop: 60, paddingHorizontal: 30, gap: 14 },
+  emptyText: { textAlign: 'center', color: colors.textMuted, fontSize: 14, lineHeight: 20 },
+  emptyBtn: {
+    backgroundColor: colors.accent,
+    borderRadius: radii.pill,
+    paddingHorizontal: 20,
+    paddingVertical: 10
+  },
+  emptyBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
   modalBackdrop: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',

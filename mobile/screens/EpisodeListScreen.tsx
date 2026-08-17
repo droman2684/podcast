@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from 'react-native'
 import { Settings, ChevronDown, ChevronUp, Download, Trash2, ListPlus, Check, RotateCcw } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
@@ -130,6 +130,14 @@ export default function EpisodeListScreen({ podcast, onBack, onPlay, onOpenSetti
   const libraryLoading = useStore((s) => s.libraryLoading)
   const loadLibrary = useStore((s) => s.loadLibrary)
 
+  // Shows with hundreds of episodes had no quick way to jump to "what have
+  // I started but not finished" — only the full chronological list.
+  const [filter, setFilter] = useState<'all' | 'inProgress'>('all')
+  const filteredEpisodes = useMemo(() => {
+    if (filter === 'all') return episodes
+    return episodes.filter((e) => !e.played && (positions[e.id] ?? 0) > 0)
+  }, [episodes, filter, positions])
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -144,13 +152,32 @@ export default function EpisodeListScreen({ podcast, onBack, onPlay, onOpenSetti
             <Settings size={18} color={colors.textMuted} />
           </Pressable>
         </View>
+        <View style={styles.filterRow}>
+          <Pressable
+            style={[styles.filterBtn, filter === 'all' && styles.filterBtnActive]}
+            onPress={() => setFilter('all')}
+          >
+            <Text style={[styles.filterText, filter === 'all' && styles.filterTextActive]}>All</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.filterBtn, filter === 'inProgress' && styles.filterBtnActive]}
+            onPress={() => setFilter('inProgress')}
+          >
+            <Text style={[styles.filterText, filter === 'inProgress' && styles.filterTextActive]}>In Progress</Text>
+          </Pressable>
+        </View>
       </View>
       <FlatList
-        data={episodes}
+        data={filteredEpisodes}
         keyExtractor={(e) => e.id}
         contentContainerStyle={styles.listContent}
         onRefresh={loadLibrary}
         refreshing={libraryLoading}
+        ListEmptyComponent={
+          filter === 'inProgress' ? (
+            <Text style={styles.empty}>Nothing in progress — episodes you start but don't finish show up here.</Text>
+          ) : null
+        }
         renderItem={({ item }) => (
           <EpisodeRow
             episode={item}
@@ -178,6 +205,17 @@ const styles = StyleSheet.create({
   back: { color: colors.accent, marginBottom: 8, fontSize: 15 },
   titleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, flex: 1, marginRight: 12 },
+  filterRow: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  filterBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    backgroundColor: '#e8e8ed'
+  },
+  filterBtnActive: { backgroundColor: colors.accent },
+  filterText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+  filterTextActive: { color: '#fff' },
+  empty: { textAlign: 'center', color: colors.textMuted, marginTop: 40, paddingHorizontal: 30 },
   listContent: { paddingHorizontal: 20, gap: 8, paddingBottom: 20 },
   card: {
     backgroundColor: colors.surface,

@@ -16,6 +16,7 @@ import CategoryDetailScreen from './screens/CategoryDetailScreen'
 import TabBar, { type Tab } from './components/TabBar'
 import Sidebar from './components/Sidebar'
 import AudioEngine from './components/AudioEngine'
+import MiniPlayer from './components/MiniPlayer'
 import { useLayout } from './lib/useLayout'
 import { colors } from './theme'
 
@@ -130,6 +131,16 @@ export default function App(): React.JSX.Element {
 
   const goBackFromPlayer = (): void => setRoute(cameFromRef.current)
 
+  // At tablet widths the sidebar is persistent, so picking a destination has to
+  // also unwind any drill-in the content area is currently showing — otherwise
+  // tapping "Library" while on the Player screen would appear to do nothing.
+  // Defined up here (not just before the tablet/phone return blocks) since
+  // Queue's empty state also uses it to jump straight to Library/Discover.
+  const selectTab = (next: Tab): void => {
+    setTab(next)
+    setRoute({ name: 'tabs' })
+  }
+
   let screen: React.JSX.Element
   let showTabBar = false
 
@@ -147,7 +158,13 @@ export default function App(): React.JSX.Element {
     } else if (tab === 'discover') {
       screen = <DiscoverScreen />
     } else {
-      screen = <QueueScreen onPlay={openPlayer} />
+      screen = (
+        <QueueScreen
+          onPlay={openPlayer}
+          onBrowseLibrary={() => selectTab('library')}
+          onBrowseDiscover={() => selectTab('discover')}
+        />
+      )
     }
   } else if (route.name === 'episodes') {
     const podcast = podcasts.find((p) => p.id === route.podcastId)
@@ -207,21 +224,18 @@ export default function App(): React.JSX.Element {
         <PlayerScreen episode={episode} podcast={podcast} onBack={goBackFromPlayer} />
       ) : (
         <LibraryScreen
-        onSelectPodcast={goToEpisodes}
-        onOpenSettings={openSettings}
-        onOpenAppSettings={goToAppSettings}
-        onManageCategories={goToCategories}
-      />
+          onSelectPodcast={goToEpisodes}
+          onOpenSettings={openSettings}
+          onOpenAppSettings={goToAppSettings}
+          onManageCategories={goToCategories}
+        />
       )
   }
 
-  // At tablet widths the sidebar is persistent, so picking a destination has to
-  // also unwind any drill-in the content area is currently showing — otherwise
-  // tapping "Library" while on the Player screen would appear to do nothing.
-  const selectTab = (next: Tab): void => {
-    setTab(next)
-    setRoute({ name: 'tabs' })
-  }
+  // Hidden on the Player screen itself (route.name === 'player') — showing a
+  // mini bar for the same episode you're already looking at full-screen
+  // would be redundant clutter, not a shortcut.
+  const showMiniPlayer = currentEpisodeId !== null && route.name !== 'player'
 
   if (isTablet) {
     return (
@@ -236,7 +250,10 @@ export default function App(): React.JSX.Element {
         />
         {/* Drill-in still pushes within this column for now; the list/detail
             split lands with SplitView (spec §3). */}
-        <View style={{ flex: 1 }}>{screen}</View>
+        <View style={{ flex: 1 }}>
+          <View style={{ flex: 1 }}>{screen}</View>
+          {showMiniPlayer && <MiniPlayer onOpen={openPlayer} />}
+        </View>
         <StatusBar style="auto" />
       </View>
     )
@@ -246,6 +263,7 @@ export default function App(): React.JSX.Element {
     <View style={{ flex: 1 }}>
       <AudioEngine />
       <View style={{ flex: 1 }}>{screen}</View>
+      {showMiniPlayer && <MiniPlayer onOpen={openPlayer} />}
       {showTabBar && <TabBar active={tab} onSelect={setTab} />}
       <StatusBar style="auto" />
     </View>
