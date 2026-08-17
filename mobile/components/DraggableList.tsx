@@ -14,6 +14,12 @@ interface Props<T> {
   // to the whole row (rather than a small grip icon) would swallow taps and
   // fight with swipe-to-delete on the same row.
   renderItem: (item: T, isActive: boolean, dragHandlers: PanResponderInstance['panHandlers']) => React.ReactNode
+  // Fires whenever a drag starts/ends. A parent rendering this inside a
+  // ScrollView should disable the ScrollView's own scrolling while true —
+  // its native scroll gesture recognizer can otherwise steal a vertical
+  // drag mid-gesture even though the grip's PanResponder claims the touch
+  // on start, which reads as "dragging just doesn't do anything."
+  onActiveChange?: (active: boolean) => void
 }
 
 // Hand-rolled on core PanResponder/Animated rather than a third-party
@@ -29,10 +35,19 @@ export default function DraggableList<T>({
   keyExtractor,
   itemHeight,
   onReorder,
-  renderItem
+  renderItem,
+  onActiveChange
 }: Props<T>): React.JSX.Element {
   const [order, setOrder] = useState(data)
   const [activeKey, setActiveKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    onActiveChange?.(activeKey !== null)
+    // onActiveChange intentionally excluded — a parent passing an inline
+    // function every render shouldn't retrigger this, only an actual
+    // active/inactive transition should.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeKey])
   const dragY = useRef(new Animated.Value(0)).current
   const orderRef = useRef(data)
   // One PanResponder per row key, created once and reused across renders —

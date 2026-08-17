@@ -19,12 +19,14 @@ interface LocalSettings {
   skipBackSec: number
   skipForwardSec: number
   defaultLibraryView: LibraryView
+  queueGroupedByShow: boolean
 }
 
 const DEFAULT_SETTINGS: LocalSettings = {
   skipBackSec: 15,
   skipForwardSec: 15,
-  defaultLibraryView: 'grid'
+  defaultLibraryView: 'grid',
+  queueGroupedByShow: false
 }
 
 async function saveSettings(settings: LocalSettings): Promise<void> {
@@ -112,11 +114,13 @@ interface AppState {
   skipBackSec: number
   skipForwardSec: number
   defaultLibraryView: LibraryView
+  queueGroupedByShow: boolean
   settingsLoaded: boolean
   loadSettings: () => Promise<void>
   setSkipBackSec: (sec: number) => void
   setSkipForwardSec: (sec: number) => void
   setDefaultLibraryView: (view: LibraryView) => void
+  setQueueGroupedByShow: (grouped: boolean) => void
 
   initAuth: () => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
@@ -308,6 +312,7 @@ export const useStore = create<AppState>((set, get) => ({
   skipBackSec: DEFAULT_SETTINGS.skipBackSec,
   skipForwardSec: DEFAULT_SETTINGS.skipForwardSec,
   defaultLibraryView: DEFAULT_SETTINGS.defaultLibraryView,
+  queueGroupedByShow: DEFAULT_SETTINGS.queueGroupedByShow,
   settingsLoaded: false,
 
   loadSettings: async () => {
@@ -318,6 +323,7 @@ export const useStore = create<AppState>((set, get) => ({
         skipBackSec: saved.skipBackSec ?? DEFAULT_SETTINGS.skipBackSec,
         skipForwardSec: saved.skipForwardSec ?? DEFAULT_SETTINGS.skipForwardSec,
         defaultLibraryView: saved.defaultLibraryView ?? DEFAULT_SETTINGS.defaultLibraryView,
+        queueGroupedByShow: saved.queueGroupedByShow ?? DEFAULT_SETTINGS.queueGroupedByShow,
         settingsLoaded: true
       })
     } catch (err) {
@@ -328,20 +334,26 @@ export const useStore = create<AppState>((set, get) => ({
 
   setSkipBackSec: (sec) => {
     set({ skipBackSec: sec })
-    const { skipBackSec, skipForwardSec, defaultLibraryView } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView })
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow })
   },
 
   setSkipForwardSec: (sec) => {
     set({ skipForwardSec: sec })
-    const { skipBackSec, skipForwardSec, defaultLibraryView } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView })
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow })
   },
 
   setDefaultLibraryView: (view) => {
     set({ defaultLibraryView: view })
-    const { skipBackSec, skipForwardSec, defaultLibraryView } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView })
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow })
+  },
+
+  setQueueGroupedByShow: (grouped) => {
+    set({ queueGroupedByShow: grouped })
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow })
   },
 
   currentEpisodeId: null,

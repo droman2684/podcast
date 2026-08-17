@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import {
   View,
   Text,
@@ -55,13 +55,16 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
   const downloadingIds = useStore((s) => s.downloadingIds)
   const downloadEpisode = useStore((s) => s.downloadEpisode)
   const removeDownload = useStore((s) => s.removeDownload)
+  const grouped = useStore((s) => s.queueGroupedByShow)
+  const setGrouped = useStore((s) => s.setQueueGroupedByShow)
 
-  // Drag-to-reorder only applies to the plain manual order — once grouped
-  // by show, "reorder" would mean something different (reorder within a
-  // group? reorder the groups themselves?) that this list can't express,
-  // so grouped view is browse/remove only.
-  const [grouped, setGrouped] = useState(false)
   const [detailItem, setDetailItem] = useState<QueueItem | null>(null)
+  // While a row is being dragged, the ScrollView's own scroll gesture has
+  // to be disabled — its native scroll recognizer can otherwise steal a
+  // vertical drag mid-gesture even though the grip's PanResponder claims
+  // the touch first, which reads as "dragging just doesn't do anything."
+  const [dragging, setDragging] = useState(false)
+  const handleDragActiveChange = useCallback((active: boolean) => setDragging(active), [])
 
   const podcastById = useMemo(() => new Map(podcasts.map((p) => [p.id, p])), [podcasts])
 
@@ -105,7 +108,7 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
     return (
       <View style={[styles.row, isActive && styles.rowActive]}>
         {dragHandlers && (
-          <View {...dragHandlers}>
+          <View style={styles.gripHandle} hitSlop={12} {...dragHandlers}>
             <GripVertical size={18} color={colors.textDisabled} />
           </View>
         )}
@@ -202,12 +205,13 @@ export default function QueueScreen({ onPlay }: Props): React.JSX.Element {
           })}
         </ScrollView>
       ) : (
-        <ScrollView contentContainerStyle={styles.listContent}>
+        <ScrollView contentContainerStyle={styles.listContent} scrollEnabled={!dragging}>
           <DraggableList
             data={items}
             keyExtractor={(item) => item.episode.id}
             itemHeight={ROW_SLOT_HEIGHT}
             onReorder={(reordered) => reorderQueue(reordered.map((r) => r.episode.id))}
+            onActiveChange={handleDragActiveChange}
             renderItem={(item, isActive, dragHandlers) => (
               <SwipeToDelete deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
                 {renderRow(item, isActive, dragHandlers)}
@@ -298,6 +302,7 @@ const styles = StyleSheet.create({
     ...cardShadow
   },
   rowActive: { opacity: 0.85 },
+  gripHandle: { padding: 6, alignItems: 'center', justifyContent: 'center' },
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   epTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
   metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
