@@ -1,21 +1,23 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
+import { View, Text, Pressable, ScrollView, Modal, ActivityIndicator, StyleSheet } from 'react-native'
 import {
-  View,
-  Text,
-  Pressable,
-  ScrollView,
-  Modal,
-  ActivityIndicator,
-  StyleSheet,
-  type GestureResponderHandlers
-} from 'react-native'
-import { GripVertical, Play, Pause, Info, X, Download, Trash2, Settings } from 'lucide-react-native'
+  ChevronUp,
+  ChevronDown,
+  ChevronsUp,
+  ChevronsDown,
+  Play,
+  Pause,
+  Info,
+  X,
+  Download,
+  Trash2,
+  Settings
+} from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { groupByPodcast } from '@shared/queueView'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import SwipeToDelete from '../components/SwipeToDelete'
-import DraggableList from '../components/DraggableList'
 import { stripHtml } from '../lib/stripHtml'
 import { colors, radii, cardShadow } from '../theme'
 
@@ -31,7 +33,6 @@ interface Props {
   onOpenAppSettings: () => void
 }
 
-const ROW_SLOT_HEIGHT = 84
 const ROW_HEIGHT = 76
 
 function formatRemaining(durationSec: number, positionSec: number): string {
@@ -69,12 +70,6 @@ export default function QueueScreen({
   const setGrouped = useStore((s) => s.setQueueGroupedByShow)
 
   const [detailItem, setDetailItem] = useState<QueueItem | null>(null)
-  // While a row is being dragged, the ScrollView's own scroll gesture has
-  // to be disabled — its native scroll recognizer can otherwise steal a
-  // vertical drag mid-gesture even though the grip's PanResponder claims
-  // the touch first, which reads as "dragging just doesn't do anything."
-  const [dragging, setDragging] = useState(false)
-  const handleDragActiveChange = useCallback((active: boolean) => setDragging(active), [])
 
   const podcastById = useMemo(() => new Map(podcasts.map((p) => [p.id, p])), [podcasts])
 
@@ -100,11 +95,27 @@ export default function QueueScreen({
     if (willPlay) onPlay(podcastId, episodeId)
   }
 
-  const renderRow = (
-    item: QueueItem,
-    isActive: boolean,
-    dragHandlers?: GestureResponderHandlers
-  ): React.JSX.Element => {
+  // Replaced drag-to-reorder per request — a hand-rolled PanResponder drag
+  // inside a ScrollView never felt reliable (grip hit target, scroll vs.
+  // drag gesture conflicts). Arrow buttons are slower for a big jump but
+  // every tap does exactly what it says, plus Move to Top/Bottom in the
+  // detail modal for the big jumps arrows alone would be tedious for.
+  const moveInQueue = (episodeId: string, targetIndex: number): void => {
+    const currentIndex = queue.indexOf(episodeId)
+    if (currentIndex === -1) return
+    const clamped = Math.max(0, Math.min(queue.length - 1, targetIndex))
+    if (clamped === currentIndex) return
+    const next = [...queue]
+    const [moved] = next.splice(currentIndex, 1)
+    next.splice(clamped, 0, moved)
+    reorderQueue(next)
+  }
+  const moveUp = (episodeId: string): void => moveInQueue(episodeId, queue.indexOf(episodeId) - 1)
+  const moveDown = (episodeId: string): void => moveInQueue(episodeId, queue.indexOf(episodeId) + 1)
+  const moveToTop = (episodeId: string): void => moveInQueue(episodeId, 0)
+  const moveToBottom = (episodeId: string): void => moveInQueue(episodeId, queue.length - 1)
+
+  const renderRow = (item: QueueItem, position?: { index: number; total: number }): React.JSX.Element => {
     const isCurrent = currentEpisodeId === item.episode.id
     const downloaded = Boolean(downloadedUris[item.episode.id])
     const downloading = Boolean(downloadingIds[item.episode.id])
@@ -116,10 +127,28 @@ export default function QueueScreen({
     const positionSec = isCurrent ? currentTimeSec : (positions[item.episode.id] ?? 0)
     const progress = item.episode.durationSec > 0 ? Math.min(1, positionSec / item.episode.durationSec) : 0
     return (
-      <View style={[styles.row, isActive && styles.rowActive]}>
-        {dragHandlers && (
-          <View style={styles.gripHandle} hitSlop={12} accessibilityLabel="Drag to reorder" {...dragHandlers}>
-            <GripVertical size={18} color={colors.textDisabled} />
+      <View style={styles.row}>
+        {position && (
+          <View style={styles.moveControls}>
+            <Pressable
+              hitSlop={6}
+              disabled={position.index === 0}
+              onPress={() => moveUp(item.episode.id)}
+              accessibilityLabel="Move up"
+            >
+              <ChevronUp size={18} color={position.index === 0 ? colors.textDisabled : colors.textMuted} />
+            </Pressable>
+            <Pressable
+              hitSlop={6}
+              disabled={position.index === position.total - 1}
+              onPress={() => moveDown(item.episode.id)}
+              accessibilityLabel="Move down"
+            >
+              <ChevronDown
+                size={18}
+                color={position.index === position.total - 1 ? colors.textDisabled : colors.textMuted}
+              />
+            </Pressable>
           </View>
         )}
         <Pressable
@@ -223,7 +252,7 @@ export default function QueueScreen({
                     deleteLabel="Remove"
                     onDelete={() => removeFromQueue(episode.id)}
                   >
-                    {renderRow({ podcast, episode }, false)}
+                    {renderRow({ podcast, episode })}
                   </SwipeToDelete>
                 ))}
               </View>
@@ -231,19 +260,12 @@ export default function QueueScreen({
           })}
         </ScrollView>
       ) : (
-        <ScrollView contentContainerStyle={styles.listContent} scrollEnabled={!dragging}>
-          <DraggableList
-            data={items}
-            keyExtractor={(item) => item.episode.id}
-            itemHeight={ROW_SLOT_HEIGHT}
-            onReorder={(reordered) => reorderQueue(reordered.map((r) => r.episode.id))}
-            onActiveChange={handleDragActiveChange}
-            renderItem={(item, isActive, dragHandlers) => (
-              <SwipeToDelete deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
-                {renderRow(item, isActive, dragHandlers)}
-              </SwipeToDelete>
-            )}
-          />
+        <ScrollView contentContainerStyle={styles.listContent}>
+          {items.map((item, index) => (
+            <SwipeToDelete key={item.episode.id} deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
+              {renderRow(item, { index, total: items.length })}
+            </SwipeToDelete>
+          ))}
         </ScrollView>
       )}
 
@@ -278,6 +300,33 @@ export default function QueueScreen({
                     {stripHtml(detailItem.episode.description) || 'No description available.'}
                   </Text>
                 </ScrollView>
+                {/* Move-to-top/bottom only makes sense for the plain manual
+                    order — grouped-by-show view is browse/remove only, same
+                    as arrows never showing there either. */}
+                {!grouped && (
+                  <View style={styles.modalMoveRow}>
+                    <Pressable
+                      style={styles.modalMoveBtn}
+                      onPress={() => {
+                        moveToTop(detailItem.episode.id)
+                        setDetailItem(null)
+                      }}
+                    >
+                      <ChevronsUp size={15} color={colors.accent} />
+                      <Text style={styles.modalMoveBtnText}>Move to Top</Text>
+                    </Pressable>
+                    <Pressable
+                      style={styles.modalMoveBtn}
+                      onPress={() => {
+                        moveToBottom(detailItem.episode.id)
+                        setDetailItem(null)
+                      }}
+                    >
+                      <ChevronsDown size={15} color={colors.accent} />
+                      <Text style={styles.modalMoveBtnText}>Move to Bottom</Text>
+                    </Pressable>
+                  </View>
+                )}
               </>
             )}
           </Pressable>
@@ -384,8 +433,7 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     ...cardShadow
   },
-  rowActive: { opacity: 0.85 },
-  gripHandle: { padding: 6, alignItems: 'center', justifyContent: 'center' },
+  moveControls: { alignItems: 'center', gap: 2 },
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   epTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
   metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
@@ -422,5 +470,17 @@ const styles = StyleSheet.create({
   },
   modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
   modalBody: { marginTop: 4 },
-  modalDescription: { fontSize: 13, color: colors.textSecondary, lineHeight: 19, paddingBottom: 20 }
+  modalDescription: { fontSize: 13, color: colors.textSecondary, lineHeight: 19, paddingBottom: 20 },
+  modalMoveRow: { flexDirection: 'row', gap: 10, paddingBottom: 10 },
+  modalMoveBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 12,
+    borderRadius: radii.item,
+    backgroundColor: colors.accentBg
+  },
+  modalMoveBtnText: { color: colors.accent, fontWeight: '600', fontSize: 13 }
 })

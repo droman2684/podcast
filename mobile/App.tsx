@@ -258,6 +258,7 @@ export default function App(): React.JSX.Element {
           onSelect={selectTab}
           onOpenSettings={goToAppSettings}
           onOpenPlayer={openPlayer}
+          currentEpisodeId={currentEpisodeId}
         />
         {/* Drill-in still pushes within this column for now; the list/detail
             split lands with SplitView (spec §3). */}

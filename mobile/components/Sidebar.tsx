@@ -7,6 +7,7 @@ import Artwork from './Artwork'
 import { colors, radii } from '../theme'
 import type { LayoutMode } from '../lib/useLayout'
 import type { Tab } from './TabBar'
+import { buildEpisodeIndex } from '../lib/episodeIndex'
 
 export const SIDEBAR_WIDTH = 260
 export const RAIL_WIDTH = 88
@@ -32,6 +33,7 @@ interface Props {
   onSelect: (tab: Tab) => void
   onOpenSettings: () => void
   onOpenPlayer: (podcastId: string, episodeId: string) => void
+  currentEpisodeId: string | null
 }
 
 // Replaces TabBar at `rail` and `regular` widths. Deliberately a drop-in for
@@ -42,7 +44,8 @@ export default function Sidebar({
   active,
   onSelect,
   onOpenSettings,
-  onOpenPlayer
+  onOpenPlayer,
+  currentEpisodeId
 }: Props): React.JSX.Element {
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
@@ -57,19 +60,37 @@ export default function Sidebar({
     queue: queue.length
   }
 
-  // Episodes with a saved position that aren't finished. The store has no
-  // "last played at" timestamp, so this is ordered by publish date — newest
-  // first.
+  // Episodes with a saved position that aren't finished, plus whatever's
+  // actively loaded right now regardless of its played/position state —
+  // without that, "currently listening" could still show empty: a fresh
+  // position save lags a few seconds behind actual playback, and a
+  // re-played once-finished episode stays marked played. The store has no
+  // "last played at" timestamp, so the rest is ordered by publish date —
+  // newest first.
+  const episodeIndex = useMemo(() => buildEpisodeIndex(episodesByPodcast), [episodesByPodcast])
   const inProgress = useMemo(() => {
     const out: { episode: Episode; podcast: Podcast }[] = []
+    const seen = new Set<string>()
+
+    const currentEpisode = currentEpisodeId ? episodeIndex.get(currentEpisodeId) : undefined
+    const currentPodcast = currentEpisode ? podcasts.find((p) => p.id === currentEpisode.podcastId) : undefined
+    if (currentEpisode && currentPodcast) {
+      out.push({ episode: currentEpisode, podcast: currentPodcast })
+      seen.add(currentEpisode.id)
+    }
+
+    const rest: { episode: Episode; podcast: Podcast }[] = []
     for (const podcast of podcasts) {
       for (const episode of episodesByPodcast[podcast.id] ?? []) {
-        if (!episode.played && (positions[episode.id] ?? 0) > 0) out.push({ episode, podcast })
+        if (!seen.has(episode.id) && !episode.played && (positions[episode.id] ?? 0) > 0) {
+          rest.push({ episode, podcast })
+        }
       }
     }
-    out.sort((a, b) => (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1))
-    return out.slice(0, RECENT_LIMIT)
-  }, [podcasts, episodesByPodcast, positions])
+    rest.sort((a, b) => (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1))
+
+    return [...out, ...rest].slice(0, RECENT_LIMIT)
+  }, [podcasts, episodesByPodcast, positions, episodeIndex, currentEpisodeId])
 
   const initials = (userEmail ?? '?').slice(0, 2).toUpperCase()
 
