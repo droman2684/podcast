@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { AppState as RNAppState } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import type { Podcast, Episode, PodcastSettings, Station, PrivateFeed } from '@shared/types'
 import type { DiscoverPodcast } from '@shared/types'
@@ -147,6 +148,17 @@ interface AppState {
   setNotify: (podcastId: string, notify: boolean) => Promise<void>
 
   savePosition: (episodeId: string, positionSec: number) => Promise<void>
+  // Fetches the authoritative position for one episode straight from
+  // Supabase rather than trusting the local `positions` cache, which can be
+  // stale by however long it's been since this device last loaded its
+  // library — exactly the gap that made switching devices mid-listen show
+  // the wrong resume point. Used by AudioEngine right before seeding
+  // playback so pressing play always resumes from the truth, not a snapshot.
+  fetchLatestPosition: (episodeId: string) => Promise<number | null>
+  // Re-pulls just positions + queue (cheap, no RSS re-fetch) — called on
+  // app foreground so Continue Listening / queue progress bars catch up
+  // after listening happened on another device while this one was backgrounded.
+  refreshPositions: () => Promise<void>
   setPlayed: (episodeId: string, podcastId: string, played: boolean) => Promise<void>
   markAllPlayed: (podcastId: string) => Promise<void>
 
@@ -854,6 +866,50 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  fetchLatestPosition: async (episodeId) => {
+    const userId = await currentUserId()
+    if (!userId) return null
+    try {
+      const { data, error } = await supabase
+        .from('playback_positions')
+        .select('position_sec')
+        .eq('user_id', userId)
+        .eq('episode_id', episodeId)
+        .maybeSingle()
+      if (error) throw new Error(error.message)
+      const sec = data?.position_sec ?? null
+      if (sec !== null) set((state) => ({ positions: { ...state.positions, [episodeId]: sec } }))
+      return sec
+    } catch (err) {
+      console.error(`[position] fetch latest failed for ${episodeId}:`, err)
+      return null
+    }
+  },
+
+  refreshPositions: async () => {
+    const userId = await currentUserId()
+    if (!userId) return
+    try {
+      const [positionRows, queueResult] = await Promise.all([
+        fetchAllRows<{ episode_id: string; position_sec: number }>((from, to) =>
+          supabase
+            .from('playback_positions')
+            .select('*', { count: 'exact' })
+            .eq('user_id', userId)
+            .range(from, to)
+        ),
+        supabase.from('queue').select('*').eq('user_id', userId).maybeSingle()
+      ])
+      const positions: Record<string, number> = {}
+      for (const row of positionRows) positions[row.episode_id] = row.position_sec
+      const queueRow = unwrap(queueResult)
+      const queue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
+      set({ positions, queue })
+    } catch (err) {
+      console.error('[refreshPositions] failed:', err)
+    }
+  },
+
   setPlayed: async (episodeId, podcastId, played) => {
     set((state) => {
       const episodes = (state.episodesByPodcast[podcastId] ?? []).map((e) =>
@@ -1100,3 +1156,14 @@ export const useStore = create<AppState>((set, get) => ({
   setPlaybackTime: (currentTimeSec, duration) => set({ currentTimeSec, duration }),
   setPlaybackRate: (rate) => set({ playbackRate: rate })
 }))
+
+// Coming back to the foreground is exactly the moment listening may have
+// happened elsewhere (put the phone down, picked up the iPad) — re-pull
+// positions/queue then so Continue Listening, queue progress bars, and the
+// Sidebar don't keep showing whatever was true when this device's app was
+// last opened.
+RNAppState.addEventListener('change', (next) => {
+  if (next !== 'active') return
+  const state = useStore.getState()
+  if (state.signedIn && state.libraryLoaded) state.refreshPositions()
+})

@@ -23,6 +23,7 @@ export default function AudioEngine(): null {
   const podcasts = useStore((s) => s.podcasts)
   const queue = useStore((s) => s.queue)
   const savePosition = useStore((s) => s.savePosition)
+  const fetchLatestPosition = useStore((s) => s.fetchLatestPosition)
   const setPlayed = useStore((s) => s.setPlayed)
   const removeFromQueue = useStore((s) => s.removeFromQueue)
   const clearSeekRequest = useStore((s) => s.clearSeekRequest)
@@ -75,12 +76,24 @@ export default function AudioEngine(): null {
     })
   }, [episode?.id, episode?.audioUrl, downloadedUris, podcast?.isPrivate, podcast?.id, player])
 
+  // Fetches this episode's position fresh from Supabase rather than trusting
+  // the local `positions` cache, which reflects whatever this device last
+  // synced — possibly stale if listening happened on another device since.
+  // Falls back to the local value only if the fetch fails (e.g. offline).
   useEffect(() => {
     if (!status.isLoaded || !episode || seededPositionFor.current === episode.id) return
-    const saved = positions[episode.id] ?? 0
-    if (saved > 0) player.seekTo(saved)
     seededPositionFor.current = episode.id
-  }, [status.isLoaded, episode?.id, player, positions])
+    let cancelled = false
+    const episodeId = episode.id
+    fetchLatestPosition(episodeId).then((remoteSec) => {
+      if (cancelled || loadedEpisodeId.current !== episodeId) return
+      const saved = remoteSec ?? positions[episodeId] ?? 0
+      if (saved > 0) player.seekTo(saved)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [status.isLoaded, episode?.id, player, fetchLatestPosition])
 
   useEffect(() => {
     if (playing) player.play()
