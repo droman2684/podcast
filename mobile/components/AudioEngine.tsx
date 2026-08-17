@@ -40,6 +40,7 @@ export default function AudioEngine(): null {
   const loadedEpisodeId = useRef<string | null>(null)
   const seededPositionFor = useRef<string | null>(null)
   const finishedFor = useRef<string | null>(null)
+  const prevDidJustFinish = useRef(false)
 
   // Kept in a ref (rather than read from `status.currentTime` directly)
   // so the effects below can flush the current position on demand —
@@ -193,8 +194,21 @@ export default function AudioEngine(): null {
     return () => clearInterval(interval)
   }, [playing, episode?.id])
 
+  // expo-audio's didJustFinish is level-triggered, not a one-shot event: it
+  // stays true across renders until the next item's status update arrives
+  // (which can take a while over the network), not just for the render
+  // where the episode actually ended. Reacting to it here on every render
+  // where it happens to be true — rather than only on the false→true
+  // edge — meant that calling loadEpisode(nextId) below (which swaps
+  // `episode` to the next queue entry and re-runs this effect while the
+  // native status still hadn't caught up) treated the *next*, still-unplayed
+  // episode as finished too, and the one after that, cascading through and
+  // emptying the entire queue in one burst every time a single episode
+  // actually finished.
   useEffect(() => {
-    if (!status.didJustFinish || !episode || finishedFor.current === episode.id) return
+    const justFinished = status.didJustFinish && !prevDidJustFinish.current
+    prevDidJustFinish.current = status.didJustFinish
+    if (!justFinished || !episode || finishedFor.current === episode.id) return
     finishedFor.current = episode.id
     savePosition(episode.id, 0)
     setPlayed(episode.id, episode.podcastId, true)
