@@ -92,8 +92,17 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
     </View>
   )
 
+  // alignSelf: 'stretch' on the outer wrapper matters specifically for the
+  // tablet layout below: its ScrollView content uses alignItems: 'center'
+  // to center the artwork/title, which (without this) also shrinks this
+  // whole block to its children's natural width — an empty bar/thumb View
+  // and a row of two short Text nodes have almost no natural width, so the
+  // track and the time labels' spacing both collapsed to nothing, leaving
+  // only the absolutely-positioned thumb visible and the two times jammed
+  // together. On phone this is a no-op (the container's default alignItems
+  // is already 'stretch').
   const scrubber = (
-    <>
+    <View style={styles.scrubberBlock}>
       <View style={styles.barTouchArea} onLayout={onBarLayout} {...panHandlers}>
         <View style={styles.bar}>
           <View style={[styles.barFill, { width: `${progress * 100}%` }]} />
@@ -104,7 +113,7 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
         <Text style={styles.timeText}>{formatTime(displayedTimeSec)}</Text>
         <Text style={styles.timeText}>{formatTime(duration)}</Text>
       </View>
-    </>
+    </View>
   )
 
   const speedPill = (
@@ -226,6 +235,7 @@ const styles = StyleSheet.create({
   artworkWrap: { alignItems: 'center', marginBottom: 20 },
   podcastName: { fontSize: 13, color: colors.textMuted, marginBottom: 4, textAlign: 'center' },
   title: { fontSize: 18, fontWeight: '700', marginBottom: 20, textAlign: 'center', color: colors.textPrimary },
+  scrubberBlock: { alignSelf: 'stretch' },
   barTouchArea: {
     justifyContent: 'center',
     paddingVertical: 12,
@@ -306,10 +316,10 @@ const styles = StyleSheet.create({
   // titles there already truncate to one line, so a tighter column just
   // means more truncation, not lost information.
   tabletRight: {
-    width: 260,
+    width: 180,
     borderLeftWidth: StyleSheet.hairlineWidth,
     borderLeftColor: colors.border,
-    padding: 20
+    padding: 14
   },
   podcastNameTablet: { fontSize: 14, color: colors.textMuted, marginTop: 20, textAlign: 'center' },
   titleTablet: {
@@ -319,7 +329,7 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     textAlign: 'center',
     color: colors.textPrimary,
-    maxWidth: 560
+    maxWidth: 640
   },
   controlsTablet: {
     flexDirection: 'row',
