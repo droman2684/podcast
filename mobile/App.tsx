@@ -19,6 +19,7 @@ import Sidebar from './components/Sidebar'
 import AudioEngine from './components/AudioEngine'
 import MiniPlayer from './components/MiniPlayer'
 import PlayerBar from './components/PlayerBar'
+import OfflineBanner from './components/OfflineBanner'
 import SplitView from './components/SplitView'
 import { useLayout } from './lib/useLayout'
 import { colors } from './theme'
@@ -52,6 +53,8 @@ export default function App(): React.JSX.Element {
   const playing = useStore((s) => s.playing)
   const togglePlay = useStore((s) => s.togglePlay)
   const loadEpisode = useStore((s) => s.loadEpisode)
+  const subscribeRealtime = useStore((s) => s.subscribeRealtime)
+  const unsubscribeRealtime = useStore((s) => s.unsubscribeRealtime)
 
   const [tab, setTab] = useState<Tab>('queue')
   const [route, setRoute] = useState<Route>({ name: 'tabs' })
@@ -89,6 +92,16 @@ export default function App(): React.JSX.Element {
   useEffect(() => {
     if (signedIn && !stationsLoaded) loadStations()
   }, [signedIn, stationsLoaded, loadStations])
+
+  // Live updates for another device's queue/position/played-state edits
+  // while this device stays open — previously those only became visible on
+  // this device's own next foreground or library reload. Torn down on
+  // sign-out/unmount rather than left running against a signed-out session.
+  useEffect(() => {
+    if (!signedIn) return
+    subscribeRealtime()
+    return () => unsubscribeRealtime()
+  }, [signedIn, subscribeRealtime, unsubscribeRealtime])
 
   if (authLoading) {
     return (
@@ -305,19 +318,22 @@ export default function App(): React.JSX.Element {
     }
 
     return (
-      <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.bg }}>
+      <View style={{ flex: 1, backgroundColor: colors.bg }}>
         <AudioEngine />
-        <Sidebar
-          mode={mode}
-          active={tab}
-          onSelect={selectTab}
-          onOpenSettings={goToAppSettings}
-          onOpenPlayer={openPlayer}
-          currentEpisodeId={currentEpisodeId}
-        />
-        <View style={{ flex: 1 }}>
-          <View style={{ flex: 1 }}>{tabletScreen}</View>
-          {showMiniPlayer && <PlayerBar onOpen={openPlayer} />}
+        <OfflineBanner />
+        <View style={{ flex: 1, flexDirection: 'row' }}>
+          <Sidebar
+            mode={mode}
+            active={tab}
+            onSelect={selectTab}
+            onOpenSettings={goToAppSettings}
+            onOpenPlayer={openPlayer}
+            currentEpisodeId={currentEpisodeId}
+          />
+          <View style={{ flex: 1 }}>
+            <View style={{ flex: 1 }}>{tabletScreen}</View>
+            {showMiniPlayer && <PlayerBar onOpen={openPlayer} />}
+          </View>
         </View>
         <StatusBar style="auto" />
       </View>
@@ -327,6 +343,7 @@ export default function App(): React.JSX.Element {
   return (
     <View style={{ flex: 1 }}>
       <AudioEngine />
+      <OfflineBanner />
       <View style={{ flex: 1 }}>{screen}</View>
       {showMiniPlayer && <MiniPlayer onOpen={openPlayer} />}
       {showTabBar && <TabBar active={tab} onSelect={setTab} />}

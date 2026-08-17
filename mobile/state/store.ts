@@ -1,6 +1,8 @@
 import { create } from 'zustand'
 import { AppState as RNAppState } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import NetInfo from '@react-native-community/netinfo'
+import type { RealtimeChannel } from '@supabase/supabase-js'
 import type { Podcast, Episode, PodcastSettings, Station, PrivateFeed } from '@shared/types'
 import type { DiscoverPodcast } from '@shared/types'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
@@ -179,6 +181,11 @@ function isRemoteNewer(key: string, remoteUpdatedAtIso: string | null | undefine
 // toggling coalesces into the same fetch instead of firing overlapping ones.
 let refreshPositionsInFlight: Promise<void> | null = null
 
+// Live subscriptions started by subscribeRealtime(), torn down by
+// unsubscribeRealtime() — module-scoped rather than in Zustand state since
+// these are side-effect handles, not data the UI ever reads.
+let realtimeChannels: RealtimeChannel[] = []
+
 interface PodcastRow {
   id: string
   feed_url: string
@@ -222,6 +229,13 @@ interface AppState {
   signedIn: boolean
   userEmail: string | null
 
+  // Set by the NetInfo listener wired up at the bottom of this file — every
+  // write action already fails silently past a console.error with no
+  // network, which reads as "the button didn't work" with nothing to tell
+  // the user why. Surfacing this lets the UI show an explicit "you're
+  // offline" state instead of a mysteriously inert app.
+  isOffline: boolean
+
   podcasts: Podcast[]
   episodesByPodcast: Record<string, Episode[]>
   positions: Record<string, number>
@@ -252,6 +266,20 @@ interface AppState {
   subscribe: (podcast: DiscoverPodcast) => Promise<void>
   unsubscribe: (podcastId: string) => Promise<void>
   setNotify: (podcastId: string, notify: boolean) => Promise<void>
+
+  // Live cross-device sync for the three tables that were previously
+  // poll-only (loadLibrary on open, refreshPositions on foreground) — a
+  // second device's edit now arrives while this one stays open, instead of
+  // only becoming visible after this device backgrounds/foregrounds or
+  // reloads its library. Requires playback_positions/queue/episode_played
+  // to actually be enabled for Realtime in the Supabase dashboard (Database
+  // > Replication) — the subscription is silently a no-op otherwise, same
+  // as any Supabase Realtime channel with nothing published to it. Every
+  // incoming row still goes through the same isRemoteNewer gate as a
+  // regular pull, so this device's own writes (which the channel echoes
+  // back) never re-apply themselves.
+  subscribeRealtime: () => Promise<void>
+  unsubscribeRealtime: () => void
 
   // Hydrates `positions` from this device's local cache before anything
   // else has loaded — called once at startup (see App.tsx), same as
@@ -457,6 +485,7 @@ export const useStore = create<AppState>((set, get) => ({
   authError: null,
   signedIn: false,
   userEmail: null,
+  isOffline: false,
 
   podcasts: [],
   episodesByPodcast: {},
@@ -1018,6 +1047,87 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  subscribeRealtime: async () => {
+    if (realtimeChannels.length > 0) return
+    await ensureSyncLedgerLoaded()
+    const userId = await currentUserId()
+    if (!userId) return
+
+    const positionsChannel = supabase
+      .channel(`rt-positions-${userId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'playback_positions', filter: `user_id=eq.${userId}` },
+        (payload) => {
+          const row = payload.new as
+            | { episode_id: string; position_sec: number; updated_at: string }
+            | undefined
+          if (!row?.episode_id) return
+          const key = `playbackPosition:${row.episode_id}`
+          if (!isRemoteNewer(key, row.updated_at)) return
+          touchSync(key, new Date(row.updated_at).getTime())
+          set((state) => {
+            const merged = { ...state.positions, [row.episode_id]: row.position_sec }
+            saveLocalPositions(merged).catch(() => {})
+            return { positions: merged }
+          })
+        }
+      )
+      .subscribe()
+
+    const queueChannel = supabase
+      .channel(`rt-queue-${userId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'queue', filter: `user_id=eq.${userId}` },
+        (payload) => {
+          const row = payload.new as { episode_ids: string[]; updated_at: string } | undefined
+          if (!row) return
+          if (!isRemoteNewer('queue', row.updated_at)) return
+          touchSync('queue', new Date(row.updated_at).getTime())
+          set({ queue: Array.isArray(row.episode_ids) ? row.episode_ids : [] })
+        }
+      )
+      .subscribe()
+
+    const playedChannel = supabase
+      .channel(`rt-played-${userId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'episode_played', filter: `user_id=eq.${userId}` },
+        (payload) => {
+          const row = payload.new as
+            | { episode_id: string; podcast_id: string; played: boolean; updated_at: string }
+            | undefined
+          if (!row?.episode_id) return
+          const key = `episodePlayed:${row.episode_id}`
+          if (!isRemoteNewer(key, row.updated_at)) return
+          touchSync(key, new Date(row.updated_at).getTime())
+          set((state) => {
+            const episodes = state.episodesByPodcast[row.podcast_id]
+            const idx = episodes?.findIndex((e) => e.id === row.episode_id) ?? -1
+            if (!episodes || idx === -1) return {}
+            const updated = [...episodes]
+            updated[idx] = { ...updated[idx], played: row.played }
+            return {
+              episodesByPodcast: { ...state.episodesByPodcast, [row.podcast_id]: updated },
+              podcasts: state.podcasts.map((p) =>
+                p.id === row.podcast_id ? { ...p, unread: updated.filter((e) => !e.played).length } : p
+              )
+            }
+          })
+        }
+      )
+      .subscribe()
+
+    realtimeChannels = [positionsChannel, queueChannel, playedChannel]
+  },
+
+  unsubscribeRealtime: () => {
+    for (const channel of realtimeChannels) supabase.removeChannel(channel)
+    realtimeChannels = []
+  },
+
   savePosition: async (episodeId, positionSec) => {
     await ensureSyncLedgerLoaded()
     const next = { ...get().positions, [episodeId]: positionSec }
@@ -1450,4 +1560,11 @@ RNAppState.addEventListener('change', (next) => {
   if (next !== 'active') return
   const state = useStore.getState()
   if (state.signedIn && state.libraryLoaded) state.refreshPositions()
+})
+
+// `isConnected` is `null` briefly on startup before NetInfo has an answer —
+// treated as online (not offline) so the app doesn't flash an incorrect
+// "you're offline" banner before the first real reading comes in.
+NetInfo.addEventListener((state) => {
+  useStore.setState({ isOffline: state.isConnected === false })
 })
