@@ -68,14 +68,18 @@ export default function PlayerBar({ onOpen }: Props): React.JSX.Element | null {
   return (
     <View style={styles.bar}>
       <View style={styles.scrubRow}>
-        <Text style={styles.timeText}>{formatTime(displayedTimeSec)}</Text>
+        <Text style={styles.timeText} numberOfLines={1}>
+          {formatTime(displayedTimeSec)}
+        </Text>
         <View style={styles.scrubWrap} onLayout={onBarLayout} {...panHandlers}>
           <View style={styles.track}>
             <View style={[styles.trackFill, { width: `${progress * 100}%` }]} />
           </View>
           <View style={[styles.thumb, { left: `${progress * 100}%` }, scrubbing && styles.thumbActive]} />
         </View>
-        <Text style={styles.timeText}>{formatTime(duration)}</Text>
+        <Text style={styles.timeText} numberOfLines={1}>
+          {formatTime(duration)}
+        </Text>
       </View>
 
       <View style={styles.controlsRow}>
@@ -93,7 +97,9 @@ export default function PlayerBar({ onOpen }: Props): React.JSX.Element | null {
 
         <View style={styles.transport}>
           <Pressable onPress={() => requestSeek(Math.max(0, currentTimeSec - skipBackSec))}>
-            <Text style={styles.skipText}>-{skipBackSec}s</Text>
+            <Text style={styles.skipText} numberOfLines={1}>
+              -{skipBackSec}s
+            </Text>
           </Pressable>
           <Pressable
             style={styles.playBtn}
@@ -103,7 +109,9 @@ export default function PlayerBar({ onOpen }: Props): React.JSX.Element | null {
             {playing ? <Pause size={24} color="#fff" fill="#fff" /> : <Play size={24} color="#fff" fill="#fff" />}
           </Pressable>
           <Pressable onPress={() => requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))}>
-            <Text style={styles.skipText}>+{skipForwardSec}s</Text>
+            <Text style={styles.skipText} numberOfLines={1}>
+              +{skipForwardSec}s
+            </Text>
           </Pressable>
         </View>
 
@@ -136,7 +144,7 @@ const styles = StyleSheet.create({
   },
 
   scrubRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  timeText: { fontSize: 11.5, color: colors.textMuted, width: 38, textAlign: 'center' },
+  timeText: { fontSize: 11.5, color: colors.textMuted, width: 48, textAlign: 'center' },
   scrubWrap: { flex: 1, justifyContent: 'center', height: 24 },
   track: { height: 8, borderRadius: 4, backgroundColor: '#e0e0e6', overflow: 'hidden' },
   trackFill: { height: '100%', backgroundColor: colors.accent },
@@ -158,7 +166,7 @@ const styles = StyleSheet.create({
   podcastName: { fontSize: 11.5, color: colors.textMuted, marginTop: 2 },
 
   transport: { flexDirection: 'row', alignItems: 'center', gap: 16 },
-  skipText: { fontSize: 12.5, fontWeight: '600', color: colors.textSecondary, width: 30, textAlign: 'center' },
+  skipText: { fontSize: 12.5, fontWeight: '600', color: colors.textSecondary, width: 38, textAlign: 'center' },
   playBtn: {
     width: 52,
     height: 52,
