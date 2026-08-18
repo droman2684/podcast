@@ -71,6 +71,35 @@ const LAST_SEEN_STORAGE_KEY = 'empirepod.lastSeenEpisodeDate.v1'
 // device closing before that write lands."
 const POSITIONS_STORAGE_KEY = 'empirepod.positions.v1'
 
+// Local durable cache of the queue, mirroring the local positions cache
+// above — the `queue` table's isRemoteNewer gate can reject a pull as
+// "not newer than what this device already knows" (correctly, protecting
+// an edit still in flight), but before this cache existed the merge's
+// fallback for a rejected pull was `state.queue`, which on a cold app start
+// is always the freshly-initialized `[]` — so a rejected pull on reopen
+// showed an empty queue instead of the last real one, even though nothing
+// was actually wrong server-side. Now the fallback is this durable cache
+// instead of whatever happens to be in fresh in-memory state.
+const QUEUE_STORAGE_KEY = 'empirepod.queue.v1'
+
+async function loadLocalQueue(): Promise<string[]> {
+  try {
+    const raw = await AsyncStorage.getItem(QUEUE_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as string[]) : []
+  } catch (err) {
+    console.error('[queue] local load failed:', err)
+    return []
+  }
+}
+
+async function saveLocalQueue(queue: string[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue))
+  } catch (err) {
+    console.error('[queue] local save failed:', err)
+  }
+}
+
 async function loadLocalPositions(): Promise<Record<string, number>> {
   try {
     const raw = await AsyncStorage.getItem(POSITIONS_STORAGE_KEY)
@@ -296,6 +325,11 @@ interface AppState {
   // last closed is available immediately instead of waiting on loadLibrary's
   // network round trip.
   loadCachedPositions: () => Promise<void>
+  // Same idea, for the queue — hydrates `queue` from this device's local
+  // cache before the network pull lands, so a rejected/slow pull on cold
+  // start falls back to the last real queue instead of the empty initial
+  // state. See QUEUE_STORAGE_KEY's doc comment.
+  loadCachedQueue: () => Promise<void>
   savePosition: (episodeId: string, positionSec: number) => Promise<void>
   // Fetches the authoritative position for one episode straight from
   // Supabase rather than trusting the local `positions` cache, which can be
@@ -379,6 +413,11 @@ interface AppState {
 
 async function saveQueue(episodeIds: string[]): Promise<void> {
   await ensureSyncLedgerLoaded()
+  // Written to disk immediately, independent of the network call below —
+  // same reasoning as savePosition's saveLocalPositions: this is what makes
+  // a same-device close/reopen show the right queue even if the write below
+  // is slow, fails, or never gets the chance to run before the app closes.
+  saveLocalQueue(episodeIds).catch(() => {})
   // Stamped before the network call even starts (see touchSync's doc
   // comment) — every caller sets `queue` locally right before calling this,
   // so this covers addToQueue/removeFromQueue/reorderQueue/loadLibrary's
@@ -523,6 +562,11 @@ export const useStore = create<AppState>((set, get) => ({
   loadCachedPositions: async () => {
     const cached = await loadLocalPositions()
     set({ positions: cached })
+  },
+
+  loadCachedQueue: async () => {
+    const cached = await loadLocalQueue()
+    set({ queue: cached })
   },
 
   loadSettings: async () => {
@@ -745,6 +789,7 @@ export const useStore = create<AppState>((set, get) => ({
       // that hasn't reached the server yet (offline, or just not pushed at
       // the moment the app closed) must survive this merge rather than
       // being wiped out by a fetch that only reflects the pre-edit state.
+      if (acceptQueue) saveLocalQueue(remoteQueue).catch(() => {})
       set((state) => {
         const merged = { ...state.positions, ...positions }
         saveLocalPositions(merged).catch(() => {})
@@ -1137,7 +1182,9 @@ export const useStore = create<AppState>((set, get) => ({
           if (!row) return
           if (!isRemoteNewer('queue', row.updated_at)) return
           touchSync('queue', new Date(row.updated_at).getTime())
-          set({ queue: Array.isArray(row.episode_ids) ? row.episode_ids : [] })
+          const next = Array.isArray(row.episode_ids) ? row.episode_ids : []
+          saveLocalQueue(next).catch(() => {})
+          set({ queue: next })
         }
       )
       .subscribe()
@@ -1277,6 +1324,7 @@ export const useStore = create<AppState>((set, get) => ({
         const acceptQueue = isRemoteNewer('queue', queueRow?.updated_at)
         const remoteQueue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
         if (acceptQueue && queueRow?.updated_at) touchSync('queue', new Date(queueRow.updated_at).getTime())
+        if (acceptQueue) saveLocalQueue(remoteQueue).catch(() => {})
         set((state) => {
           const merged = { ...state.positions, ...positions }
           saveLocalPositions(merged).catch(() => {})

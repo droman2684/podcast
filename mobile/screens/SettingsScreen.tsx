@@ -1,4 +1,5 @@
-import { View, Text, Pressable, StyleSheet } from 'react-native'
+import { useState } from 'react'
+import { View, Text, Pressable, ActivityIndicator, StyleSheet } from 'react-native'
 import { useStore, type LibraryView } from '../state/store'
 import { colors, radii, cardShadow } from '../theme'
 
@@ -17,6 +18,22 @@ export default function SettingsScreen({ onBack }: Props): React.JSX.Element {
   const setDefaultLibraryView = useStore((s) => s.setDefaultLibraryView)
   const userEmail = useStore((s) => s.userEmail)
   const signOut = useStore((s) => s.signOut)
+  const libraryLoading = useStore((s) => s.libraryLoading)
+  const loadLibrary = useStore((s) => s.loadLibrary)
+  const refreshPositions = useStore((s) => s.refreshPositions)
+  const loadStations = useStore((s) => s.loadStations)
+
+  // A manual escape hatch for "I don't trust what I'm seeing right now" —
+  // rather than waiting on the next foreground/realtime event. Re-runs the
+  // same full pull loadLibrary already does on sign-in (podcasts, episodes,
+  // positions, queue, played state, settings), plus refreshPositions (cheap,
+  // catches anything loadLibrary's own gate just rejected) and stations.
+  const [justSynced, setJustSynced] = useState(false)
+  const handleSyncNow = async (): Promise<void> => {
+    await Promise.all([loadLibrary(), refreshPositions(), loadStations()])
+    setJustSynced(true)
+    setTimeout(() => setJustSynced(false), 2000)
+  }
 
   return (
     <View style={styles.container}>
@@ -70,6 +87,16 @@ export default function SettingsScreen({ onBack }: Props): React.JSX.Element {
             </Pressable>
           ))}
         </View>
+      </View>
+
+      <Text style={styles.sectionTitle}>Sync</Text>
+      <View style={styles.card}>
+        <Pressable style={styles.row} onPress={handleSyncNow} disabled={libraryLoading}>
+          <Text style={styles.rowLabel}>
+            {libraryLoading ? 'Syncing…' : justSynced ? 'Synced' : 'Sync Now'}
+          </Text>
+          {libraryLoading && <ActivityIndicator size="small" color={colors.accent} />}
+        </Pressable>
       </View>
 
       <Text style={styles.sectionTitle}>Account</Text>

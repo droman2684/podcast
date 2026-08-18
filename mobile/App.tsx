@@ -41,6 +41,7 @@ export default function App(): React.JSX.Element {
   const initAuth = useStore((s) => s.initAuth)
   const loadSettings = useStore((s) => s.loadSettings)
   const loadCachedPositions = useStore((s) => s.loadCachedPositions)
+  const loadCachedQueue = useStore((s) => s.loadCachedQueue)
   const loadDownloads = useStore((s) => s.loadDownloads)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
@@ -80,8 +81,9 @@ export default function App(): React.JSX.Element {
     // regardless of sign-in state.
     loadSettings()
     loadCachedPositions()
+    loadCachedQueue()
     loadDownloads()
-  }, [initAuth, loadSettings, loadCachedPositions, loadDownloads])
+  }, [initAuth, loadSettings, loadCachedPositions, loadCachedQueue, loadDownloads])
 
   // Loads once per sign-in, not once per Library-tab visit — LibraryScreen
   // itself only re-fetches on an explicit pull-to-refresh.
