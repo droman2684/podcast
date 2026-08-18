@@ -6,7 +6,7 @@ import { removeFromQueueOnFinish } from '../lib/queueHelpers'
 import { buildEpisodeIndex } from '../lib/episodeIndex'
 import { getPrivateFeedCredential, basicAuthHeader } from '../lib/privateFeedCredentials'
 
-const SAVE_INTERVAL_MS = 5000
+const SAVE_INTERVAL_MS = 3000
 
 // One persistent player for the whole app, mounted once here rather than
 // inside PlayerScreen — mirrors the desktop app's useAudioEngine.ts pattern.
@@ -146,11 +146,22 @@ export default function AudioEngine(): null {
     player.setPlaybackRate(playbackRate)
   }, [playbackRate, episode?.id, player])
 
+  // Saves the seek target directly rather than waiting for the next
+  // periodic tick (up to SAVE_INTERVAL_MS later) or for currentTimeRef to
+  // catch up — status.currentTime updates asynchronously after seekTo(), so
+  // a flush right after seeking could otherwise still save the pre-seek
+  // position. Scrubbing then immediately switching devices should resume
+  // from where you scrubbed to, not from a few seconds before it.
   useEffect(() => {
     if (seekRequestSec === null) return
     player.seekTo(seekRequestSec)
     clearSeekRequest()
-  }, [seekRequestSec, player, clearSeekRequest])
+    const id = loadedEpisodeId.current
+    if (id && seekRequestSec > 0) {
+      currentTimeRef.current = seekRequestSec
+      savePosition(id, seekRequestSec)
+    }
+  }, [seekRequestSec, player, clearSeekRequest, savePosition])
 
   useEffect(() => {
     setPlaybackTime(status.currentTime, status.duration)

@@ -48,12 +48,15 @@ async function saveSettings(settings: LocalSettings): Promise<void> {
 }
 
 // High-water mark (newest pubDateIso seen so far) per podcast, used to
-// detect genuinely new episodes for auto-queueing. Device-local like the
-// settings above — this is only a local heuristic for "what's new since I
-// last looked," not a source of truth, so it doesn't need to sync: the
-// queue itself is synced and de-duped, so a second device with a different
-// high-water mark can never double-add an episode another device already
-// queued. Not tracked as full id sets (could grow unbounded for
+// detect genuinely new episodes for auto-queueing. Cached here locally so a
+// same-device reload doesn't need a round trip just to know what it already
+// saw, but the source of truth is the synced counterpart in
+// podcast_settings.last_seen_pub_date (merged in loadLibrary as
+// `remoteLastSeen`) — a purely local mark used to let a device that hadn't
+// loaded its library in a while re-treat an already-handled episode as
+// "new" and auto-queue it again, silently un-removing something the user
+// (on this device or another) had deliberately taken out of the queue in
+// the meantime. Not tracked as full id sets (could grow unbounded for
 // long-running shows) — a single date per podcast is enough to know what's
 // new without an ever-growing list.
 const LAST_SEEN_STORAGE_KEY = 'empirepod.lastSeenEpisodeDate.v1'
@@ -94,6 +97,12 @@ async function loadLastSeenMap(): Promise<Record<string, string>> {
     console.error('[autoQueue] load failed:', err)
     return {}
   }
+}
+
+function maxIsoDate(a: string | undefined, b: string | undefined): string | undefined {
+  if (!a) return b
+  if (!b) return a
+  return a > b ? a : b
 }
 
 async function saveLastSeenMap(map: Record<string, string>): Promise<void> {
@@ -672,7 +681,7 @@ export const useStore = create<AppState>((set, get) => ({
             .eq('user_id', userId)
             .range(from, to)
         ),
-        fetchAllRows<{ podcast_id: string; notify: boolean }>((from, to) =>
+        fetchAllRows<{ podcast_id: string; notify: boolean; last_seen_pub_date: string | null }>((from, to) =>
           supabase
             .from('podcast_settings')
             .select('*', { count: 'exact' })
@@ -718,7 +727,13 @@ export const useStore = create<AppState>((set, get) => ({
       )
 
       const podcastSettings: Record<string, PodcastSettings> = {}
-      for (const row of settingsRows) podcastSettings[row.podcast_id] = { notify: row.notify }
+      // The synced counterpart of `lastSeen` below — see loadLastSeenMap's
+      // doc comment for why a per-device-only mark isn't enough.
+      const remoteLastSeen: Record<string, string> = {}
+      for (const row of settingsRows) {
+        podcastSettings[row.podcast_id] = { notify: row.notify }
+        if (row.last_seen_pub_date) remoteLastSeen[row.podcast_id] = row.last_seen_pub_date
+      }
 
       const queueRow = unwrap(queueResult)
       const acceptQueue = isRemoteNewer('queue', queueRow?.updated_at)
@@ -768,6 +783,11 @@ export const useStore = create<AppState>((set, get) => ({
       // already-established mark count as new.
       const lastSeen = await loadLastSeenMap()
       const newEpisodes: Episode[] = []
+      // Podcast ids whose high-water mark advances past what's currently
+      // synced to podcast_settings.last_seen_pub_date — pushed once after
+      // the loop so every other device shares the advance instead of each
+      // device only ever learning about episodes it personally fetched.
+      const lastSeenAdvances: Record<string, string> = {}
 
       await mapWithConcurrency(
         allRows,
@@ -832,14 +852,23 @@ export const useStore = create<AppState>((set, get) => ({
               isPrivate: row.is_private
             }
 
-            const priorMark = lastSeen[row.id]
+            // Combines this device's local cache with the synced mark from
+            // podcast_settings — whichever is further along — so a device
+            // that hasn't loaded its library in a while defers to what
+            // another device already established instead of re-treating an
+            // already-handled episode as new (see remoteLastSeen's doc
+            // comment above LAST_SEEN_STORAGE_KEY).
+            const priorMark = maxIsoDate(lastSeen[row.id], remoteLastSeen[row.id])
             if (priorMark) {
               for (const e of episodes) {
                 if (!e.played && e.pubDateIso > priorMark) newEpisodes.push(e)
               }
             }
             const newestPubDate = episodes.reduce((max, e) => (e.pubDateIso > max ? e.pubDateIso : max), '')
-            if (newestPubDate) lastSeen[row.id] = newestPubDate
+            if (newestPubDate) {
+              lastSeen[row.id] = newestPubDate
+              if (newestPubDate > (remoteLastSeen[row.id] ?? '')) lastSeenAdvances[row.id] = newestPubDate
+            }
 
             return { podcast, episodes }
           } catch (err) {
@@ -853,6 +882,29 @@ export const useStore = create<AppState>((set, get) => ({
       set({ privateFeedsMissingCredential: missingCredential })
 
       await saveLastSeenMap(lastSeen)
+
+      const advanceEntries = Object.entries(lastSeenAdvances)
+      if (advanceEntries.length > 0) {
+        const now = new Date().toISOString()
+        try {
+          unwrap(
+            await supabase.from('podcast_settings').upsert(
+              advanceEntries.map(([podcastId, pubDate]) => ({
+                user_id: userId,
+                podcast_id: podcastId,
+                last_seen_pub_date: pubDate,
+                updated_at: now
+              }))
+            )
+          )
+        } catch (err) {
+          // Non-fatal — this device's local `lastSeen` cache (just saved
+          // above) still prevents it from re-treating these episodes as
+          // new, only the cross-device advance failed to publish.
+          console.error('[autoQueue] failed to sync last-seen watermark:', err)
+        }
+      }
+
       if (newEpisodes.length > 0) {
         const existingQueue = get().queue
         const existingSet = new Set(existingQueue)
