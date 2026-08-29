@@ -204,3 +204,110 @@ drop trigger if exists trg_private_feeds_updated_at on private_feeds;
 create trigger trg_private_feeds_updated_at
   before insert or update on private_feeds
   for each row execute function set_synced_updated_at();
+
+-- Realtime parity — run this one now (Supabase SQL Editor). The shared sync
+-- engine (src/shared/sync/engine.ts) opens one Realtime channel per table
+-- it's given, for both mobile and desktop, so every syncable table needs to
+-- actually be published for that to do anything — a subscription to an
+-- unpublished table is a silent no-op, same as before this rework. Only
+-- playback_positions/queue/episode_played were published before; this adds
+-- the rest.
+do $$ begin
+  alter publication supabase_realtime add table podcasts;
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  alter publication supabase_realtime add table podcast_settings;
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  alter publication supabase_realtime add table stations;
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  alter publication supabase_realtime add table private_feeds;
+exception when duplicate_object then null;
+end $$;
+do $$ begin
+  alter publication supabase_realtime add table queue_prefs;
+exception when duplicate_object then null;
+end $$;
+
+-- Monotonic revision column — run this one LATER (Supabase SQL Editor),
+-- only once the app release that reads `rev` (rather than `updated_at`) for
+-- conflict resolution has actually shipped. See src/shared/sync/engine.ts's
+-- markerFromRev and its callers for that switch; running this migration
+-- before that code ships is harmless (an extra unused column), but shipping
+-- the code before running this migration is NOT — every row would read
+-- back `rev` as undefined and compare as "always newer," defeating the
+-- ledger's protection against clobbering an in-flight local edit.
+--
+-- Even a server-stamped `updated_at` (the trigger above) is still a
+-- timestamp: two edits landing in the same millisecond, or a Realtime event
+-- delivered out of order, can still tie or invert. A `bigint` stamped from
+-- one shared sequence has no resolution limit and no ordering ambiguity.
+--
+-- Deliberately a trigger-stamped column, not `generated always as
+-- identity` — identity columns only advance on INSERT, and every one of
+-- these tables is written via upsert(), so an UPDATE would never bump it.
+create sequence if not exists sync_rev_seq;
+
+create or replace function set_synced_rev()
+returns trigger as $$
+begin
+  new.rev = nextval('sync_rev_seq');
+  return new;
+end;
+$$ language plpgsql;
+
+alter table podcasts add column if not exists rev bigint not null default 0;
+alter table podcast_settings add column if not exists rev bigint not null default 0;
+alter table stations add column if not exists rev bigint not null default 0;
+alter table queue add column if not exists rev bigint not null default 0;
+alter table queue_prefs add column if not exists rev bigint not null default 0;
+alter table playback_positions add column if not exists rev bigint not null default 0;
+alter table episode_played add column if not exists rev bigint not null default 0;
+alter table private_feeds add column if not exists rev bigint not null default 0;
+
+-- Backfill every existing row to a real, non-zero rev BEFORE the trigger
+-- exists below — the ledger treats a missing local entry as marker 0, so a
+-- real row left at rev=0 would be indistinguishable from "never synced" and
+-- silently skipped forever on a device that's never seen it. Each table's
+-- updated_at trigger is disabled for the duration of its own backfill so
+-- this one-time UPDATE doesn't also bump updated_at on every historical row.
+do $$
+declare t text;
+begin
+  foreach t in array array['podcasts','podcast_settings','stations','queue','queue_prefs',
+                            'playback_positions','episode_played','private_feeds']
+  loop
+    execute format('alter table %I disable trigger trg_%I_updated_at', t, t);
+    execute format('update %I set rev = nextval(''sync_rev_seq'')', t);
+    execute format('alter table %I enable trigger trg_%I_updated_at', t, t);
+  end loop;
+end $$;
+
+drop trigger if exists trg_podcasts_rev on podcasts;
+create trigger trg_podcasts_rev before insert or update on podcasts
+  for each row execute function set_synced_rev();
+drop trigger if exists trg_podcast_settings_rev on podcast_settings;
+create trigger trg_podcast_settings_rev before insert or update on podcast_settings
+  for each row execute function set_synced_rev();
+drop trigger if exists trg_stations_rev on stations;
+create trigger trg_stations_rev before insert or update on stations
+  for each row execute function set_synced_rev();
+drop trigger if exists trg_queue_rev on queue;
+create trigger trg_queue_rev before insert or update on queue
+  for each row execute function set_synced_rev();
+drop trigger if exists trg_queue_prefs_rev on queue_prefs;
+create trigger trg_queue_prefs_rev before insert or update on queue_prefs
+  for each row execute function set_synced_rev();
+drop trigger if exists trg_playback_positions_rev on playback_positions;
+create trigger trg_playback_positions_rev before insert or update on playback_positions
+  for each row execute function set_synced_rev();
+drop trigger if exists trg_episode_played_rev on episode_played;
+create trigger trg_episode_played_rev before insert or update on episode_played
+  for each row execute function set_synced_rev();
+drop trigger if exists trg_private_feeds_rev on private_feeds;
+create trigger trg_private_feeds_rev before insert or update on private_feeds
+  for each row execute function set_synced_rev();

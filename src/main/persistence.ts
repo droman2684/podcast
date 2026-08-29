@@ -71,6 +71,11 @@ export interface PersistedData {
   syncPendingDeletes: SyncPendingDelete[]
   syncLastPushedAt: number | null
   syncLastPulledAt: number | null
+  // Generic string key/value store backing src/shared/sync/engine.ts's
+  // SyncStorageAdapter (the ledger and the outbox's pending-write queue) —
+  // reuses this file's existing debounced-write/backup machinery instead of
+  // introducing a second on-disk file just for the sync engine's state.
+  syncKV: Record<string, string>
 }
 
 function defaults(): PersistedData {
@@ -91,7 +96,8 @@ function defaults(): PersistedData {
     syncUpdatedAt: {},
     syncPendingDeletes: [],
     syncLastPushedAt: null,
-    syncLastPulledAt: null
+    syncLastPulledAt: null,
+    syncKV: {}
   }
 }
 
@@ -126,21 +132,42 @@ export function touchEpisodes(podcastId: string): void {
   dirtyEpisodeIds.add(podcastId)
 }
 
+// Registered once by sync/sync.ts (not imported directly, to avoid a
+// persistence.ts <-> sync.ts import cycle) so every touchSync/touchSyncDelete
+// call site — there are over a dozen, scattered across subscriptions.ts,
+// stations.ts, privateFeeds.ts, and ipc.ts — automatically pushes through
+// the shared outbox the moment an edit happens, instead of waiting for the
+// next periodic sync cycle to notice the dirty flag.
+type DirtyHook = (key: string) => void
+type DeleteHook = (pending: SyncPendingDelete) => void
+let dirtyHook: DirtyHook | null = null
+let deleteHook: DeleteHook | null = null
+
+export function setSyncHooks(hooks: { onDirty?: DirtyHook; onDelete?: DeleteHook }): void {
+  dirtyHook = hooks.onDirty ?? null
+  deleteHook = hooks.onDelete ?? null
+}
+
 // Marks a syncable record dirty for the next cloud-sync push. `at` defaults
 // to now, but sync.ts overrides it to the remote's own timestamp when
 // applying a pulled record — that keeps local and remote in exact agreement
-// so the next push doesn't immediately re-push what was just pulled.
-export function touchSync(key: string, at: number = Date.now()): void {
+// so the next push doesn't immediately re-push what was just pulled (in
+// which case dirtyHook is intentionally NOT fired — a pulled record isn't a
+// local edit that needs pushing back out).
+export function touchSync(key: string, at: number = Date.now(), fromRemote = false): void {
   getSnapshot().syncUpdatedAt[key] = at
+  if (!fromRemote) dirtyHook?.(key)
 }
 
-// A deleted record has nothing left for pushDirty()'s dirty-scan to find, so
-// its delete is queued explicitly instead — persisted like everything else,
-// so it survives a crash before the next sync push flushes it.
+// A deleted record has nothing left for a dirty-scan to find, so its delete
+// is queued explicitly instead — persisted like everything else, so it
+// survives a crash before the outbox flushes it.
 export function touchSyncDelete(table: SyncTable, localId: string, key: string): void {
   const snapshot = getSnapshot()
   delete snapshot.syncUpdatedAt[key]
-  snapshot.syncPendingDeletes.push({ key, table, localId, deletedAt: Date.now() })
+  const pending: SyncPendingDelete = { key, table, localId, deletedAt: Date.now() }
+  snapshot.syncPendingDeletes.push(pending)
+  deleteHook?.(pending)
 }
 
 export const VALID_STATION_SORTS = new Set(['newest', 'oldest', 'shortest', 'longest'])
@@ -219,6 +246,7 @@ export function normalize(parsed: PersistedData): PersistedData {
   const syncPendingDeletes = Array.isArray(parsed.syncPendingDeletes) ? parsed.syncPendingDeletes : []
   const syncLastPushedAt = typeof parsed.syncLastPushedAt === 'number' ? parsed.syncLastPushedAt : null
   const syncLastPulledAt = typeof parsed.syncLastPulledAt === 'number' ? parsed.syncLastPulledAt : null
+  const syncKV = parsed.syncKV && typeof parsed.syncKV === 'object' ? parsed.syncKV : {}
 
   return {
     ...parsed,
@@ -233,7 +261,8 @@ export function normalize(parsed: PersistedData): PersistedData {
     syncUpdatedAt,
     syncPendingDeletes,
     syncLastPushedAt,
-    syncLastPulledAt
+    syncLastPulledAt,
+    syncKV
   }
 }
 

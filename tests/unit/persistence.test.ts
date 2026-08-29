@@ -20,6 +20,7 @@ function baseData(overrides: Partial<PersistedData> = {}): PersistedData {
     syncPendingDeletes: [],
     syncLastPushedAt: null,
     syncLastPulledAt: null,
+    syncKV: {},
     ...overrides
   }
 }

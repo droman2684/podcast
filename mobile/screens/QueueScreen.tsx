@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { View, Text, Pressable, ScrollView, Modal, ActivityIndicator, StyleSheet } from 'react-native'
+import { View, Text, Pressable, ScrollView, Modal, ActivityIndicator, StyleSheet, Alert } from 'react-native'
 import {
   ChevronUp,
   ChevronDown,
@@ -11,7 +11,9 @@ import {
   X,
   Download,
   Trash2,
-  Settings
+  Settings,
+  CheckCircle2,
+  Circle
 } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { groupByPodcast } from '@shared/queueView'
@@ -62,6 +64,7 @@ export default function QueueScreen({
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const removeFromQueue = useStore((s) => s.removeFromQueue)
+  const removeManyFromQueue = useStore((s) => s.removeManyFromQueue)
   const reorderQueue = useStore((s) => s.reorderQueue)
   const currentEpisodeId = useStore((s) => s.currentEpisodeId)
   const playing = useStore((s) => s.playing)
@@ -79,6 +82,11 @@ export default function QueueScreen({
   const setGrouped = useStore((s) => s.setQueueGroupedByShow)
 
   const [detailItem, setDetailItem] = useState<QueueItem | null>(null)
+  // Mass-remove: a lightweight selection mode toggled from the toolbar,
+  // rather than a separate screen — rows swap their swipe-to-delete/play
+  // controls for a checkbox while active (see renderRow below).
+  const [selecting, setSelecting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
 
   const podcastById = useMemo(() => new Map(podcasts.map((p) => [p.id, p])), [podcasts])
 
@@ -124,6 +132,41 @@ export default function QueueScreen({
   const moveToTop = (episodeId: string): void => moveInQueue(episodeId, 0)
   const moveToBottom = (episodeId: string): void => moveInQueue(episodeId, queue.length - 1)
 
+  const toggleSelecting = (): void => {
+    setSelecting((prev) => !prev)
+    setSelectedIds(new Set())
+  }
+  const toggleSelected = (episodeId: string): void => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(episodeId)) next.delete(episodeId)
+      else next.add(episodeId)
+      return next
+    })
+  }
+  const toggleSelectAll = (): void => {
+    setSelectedIds((prev) => (prev.size === items.length ? new Set() : new Set(items.map((i) => i.episode.id))))
+  }
+  const confirmRemoveSelected = (): void => {
+    const count = selectedIds.size
+    if (count === 0) return
+    Alert.alert(
+      `Remove ${count} episode${count === 1 ? '' : 's'}?`,
+      'This removes them from your queue. Nothing gets deleted from the show itself.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Remove',
+          style: 'destructive',
+          onPress: () => {
+            removeManyFromQueue(Array.from(selectedIds))
+            toggleSelecting()
+          }
+        }
+      ]
+    )
+  }
+
   const renderRow = (item: QueueItem, position?: { index: number; total: number }): React.JSX.Element => {
     const isCurrent = currentEpisodeId === item.episode.id
     const downloaded = Boolean(downloadedUris[item.episode.id])
@@ -136,34 +179,47 @@ export default function QueueScreen({
     const positionSec = isCurrent ? currentTimeSec : (positions[item.episode.id] ?? 0)
     const progress = item.episode.durationSec > 0 ? Math.min(1, positionSec / item.episode.durationSec) : 0
     const selected = isTablet && detailItem?.episode.id === item.episode.id
+    const checked = selectedIds.has(item.episode.id)
     return (
       <View style={[styles.row, selected && styles.rowSelected]}>
-        {position && (
-          <View style={styles.moveControls}>
-            <Pressable
-              hitSlop={6}
-              disabled={position.index === 0}
-              onPress={() => moveUp(item.episode.id)}
-              accessibilityLabel="Move up"
-            >
-              <ChevronUp size={18} color={position.index === 0 ? colors.textDisabled : colors.textMuted} />
-            </Pressable>
-            <Pressable
-              hitSlop={6}
-              disabled={position.index === position.total - 1}
-              onPress={() => moveDown(item.episode.id)}
-              accessibilityLabel="Move down"
-            >
-              <ChevronDown
-                size={18}
-                color={position.index === position.total - 1 ? colors.textDisabled : colors.textMuted}
-              />
-            </Pressable>
-          </View>
+        {selecting ? (
+          <Pressable hitSlop={6} onPress={() => toggleSelected(item.episode.id)} accessibilityLabel="Select episode">
+            {checked ? (
+              <CheckCircle2 size={22} color={colors.accent} fill={colors.accent} />
+            ) : (
+              <Circle size={22} color={colors.textDisabled} />
+            )}
+          </Pressable>
+        ) : (
+          position && (
+            <View style={styles.moveControls}>
+              <Pressable
+                hitSlop={6}
+                disabled={position.index === 0}
+                onPress={() => moveUp(item.episode.id)}
+                accessibilityLabel="Move up"
+              >
+                <ChevronUp size={18} color={position.index === 0 ? colors.textDisabled : colors.textMuted} />
+              </Pressable>
+              <Pressable
+                hitSlop={6}
+                disabled={position.index === position.total - 1}
+                onPress={() => moveDown(item.episode.id)}
+                accessibilityLabel="Move down"
+              >
+                <ChevronDown
+                  size={18}
+                  color={position.index === position.total - 1 ? colors.textDisabled : colors.textMuted}
+                />
+              </Pressable>
+            </View>
+          )
         )}
         <Pressable
           style={styles.rowMain}
-          onPress={() => onPlay(item.podcast.id, item.episode.id, true)}
+          onPress={() =>
+            selecting ? toggleSelected(item.episode.id) : onPlay(item.podcast.id, item.episode.id, true)
+          }
         >
           <Artwork
             url={item.episode.artworkUrl ?? item.podcast.artworkUrl}
@@ -189,34 +245,38 @@ export default function QueueScreen({
             )}
           </View>
         </Pressable>
-        <Pressable
-          hitSlop={10}
-          disabled={downloading}
-          onPress={() => (downloaded ? removeDownload(item.episode.id) : downloadEpisode(item.episode))}
-          accessibilityLabel={downloaded ? 'Remove download' : 'Download episode'}
-        >
-          {downloading ? (
-            <ActivityIndicator size="small" color={colors.textMuted} />
-          ) : downloaded ? (
-            <Trash2 size={17} color={colors.accent} />
-          ) : (
-            <Download size={17} color={colors.textMuted} />
-          )}
-        </Pressable>
-        <Pressable hitSlop={10} onPress={() => setDetailItem(item)} accessibilityLabel="Episode details">
-          <Info size={17} color={colors.textMuted} />
-        </Pressable>
-        <Pressable
-          hitSlop={10}
-          onPress={() => handlePlayToggle(item.podcast.id, item.episode.id)}
-          accessibilityLabel={isCurrent && playing ? 'Pause' : 'Play'}
-        >
-          {isCurrent && playing ? (
-            <Pause size={18} color={colors.accent} fill={colors.accent} />
-          ) : (
-            <Play size={18} color={colors.accent} fill={colors.accent} />
-          )}
-        </Pressable>
+        {!selecting && (
+          <>
+            <Pressable
+              hitSlop={10}
+              disabled={downloading}
+              onPress={() => (downloaded ? removeDownload(item.episode.id) : downloadEpisode(item.episode))}
+              accessibilityLabel={downloaded ? 'Remove download' : 'Download episode'}
+            >
+              {downloading ? (
+                <ActivityIndicator size="small" color={colors.textMuted} />
+              ) : downloaded ? (
+                <Trash2 size={17} color={colors.accent} />
+              ) : (
+                <Download size={17} color={colors.textMuted} />
+              )}
+            </Pressable>
+            <Pressable hitSlop={10} onPress={() => setDetailItem(item)} accessibilityLabel="Episode details">
+              <Info size={17} color={colors.textMuted} />
+            </Pressable>
+            <Pressable
+              hitSlop={10}
+              onPress={() => handlePlayToggle(item.podcast.id, item.episode.id)}
+              accessibilityLabel={isCurrent && playing ? 'Pause' : 'Play'}
+            >
+              {isCurrent && playing ? (
+                <Pause size={18} color={colors.accent} fill={colors.accent} />
+              ) : (
+                <Play size={18} color={colors.accent} fill={colors.accent} />
+              )}
+            </Pressable>
+          </>
+        )}
       </View>
     )
   }
@@ -238,22 +298,34 @@ export default function QueueScreen({
           return (
             <View key={group.podcastId} style={styles.group}>
               <Text style={styles.groupHeader}>{podcast.name}</Text>
-              {group.episodes.map((episode) => (
-                <SwipeToDelete key={episode.id} deleteLabel="Remove" onDelete={() => removeFromQueue(episode.id)}>
-                  {renderRow({ podcast, episode })}
-                </SwipeToDelete>
-              ))}
+              {group.episodes.map((episode) =>
+                // Selecting mode drops the swipe gesture — a checkbox tap
+                // and a swipe-to-delete both living on the same row would
+                // fight each other, and selection needs the whole row's
+                // tap anyway (see renderRow's rowMain onPress above).
+                selecting ? (
+                  <View key={episode.id}>{renderRow({ podcast, episode })}</View>
+                ) : (
+                  <SwipeToDelete key={episode.id} deleteLabel="Remove" onDelete={() => removeFromQueue(episode.id)}>
+                    {renderRow({ podcast, episode })}
+                  </SwipeToDelete>
+                )
+              )}
             </View>
           )
         })}
       </ScrollView>
     ) : (
       <ScrollView contentContainerStyle={styles.listContent}>
-        {items.map((item, index) => (
-          <SwipeToDelete key={item.episode.id} deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
-            {renderRow(item, { index, total: items.length })}
-          </SwipeToDelete>
-        ))}
+        {items.map((item, index) =>
+          selecting ? (
+            <View key={item.episode.id}>{renderRow(item, { index, total: items.length })}</View>
+          ) : (
+            <SwipeToDelete key={item.episode.id} deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
+              {renderRow(item, { index, total: items.length })}
+            </SwipeToDelete>
+          )
+        )}
       </ScrollView>
     )
 
@@ -322,15 +394,52 @@ export default function QueueScreen({
         </Pressable>
       </View>
       <View style={styles.toolbar}>
-        <Pressable
-          style={[styles.groupToggle, grouped && styles.groupToggleActive]}
-          onPress={() => setGrouped(!grouped)}
-        >
-          <Text style={[styles.groupToggleText, grouped && styles.groupToggleTextActive]}>
-            Group by show
-          </Text>
-        </Pressable>
+        {selecting ? (
+          <Pressable
+            style={[styles.groupToggle, selectedIds.size > 0 && selectedIds.size === items.length && styles.groupToggleActive]}
+            onPress={toggleSelectAll}
+          >
+            <Text
+              style={[
+                styles.groupToggleText,
+                selectedIds.size > 0 && selectedIds.size === items.length && styles.groupToggleTextActive
+              ]}
+            >
+              {selectedIds.size > 0 && selectedIds.size === items.length ? 'Deselect All' : 'Select All'}
+            </Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            style={[styles.groupToggle, grouped && styles.groupToggleActive]}
+            onPress={() => setGrouped(!grouped)}
+          >
+            <Text style={[styles.groupToggleText, grouped && styles.groupToggleTextActive]}>
+              Group by show
+            </Text>
+          </Pressable>
+        )}
+        {items.length > 0 && (
+          <Pressable hitSlop={10} onPress={toggleSelecting} accessibilityLabel={selecting ? 'Cancel selecting' : 'Select episodes'}>
+            <Text style={styles.selectLink}>{selecting ? 'Cancel' : 'Select'}</Text>
+          </Pressable>
+        )}
       </View>
+
+      {selecting && (
+        <View style={styles.selectionBar}>
+          <Text style={styles.selectionCount}>
+            {selectedIds.size === 0 ? 'Select episodes to remove' : `${selectedIds.size} selected`}
+          </Text>
+          <Pressable
+            style={[styles.selectionRemoveBtn, selectedIds.size === 0 && styles.selectionRemoveBtnDisabled]}
+            disabled={selectedIds.size === 0}
+            onPress={confirmRemoveSelected}
+          >
+            <Trash2 size={15} color="#fff" />
+            <Text style={styles.selectionRemoveBtnText}>Remove</Text>
+          </Pressable>
+        </View>
+      )}
 
       {isTablet ? (
         <SplitView
@@ -425,7 +534,9 @@ const styles = StyleSheet.create({
   },
   toolbar: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'flex-end',
+    gap: 14,
     paddingHorizontal: 20,
     marginBottom: 16
   },
@@ -439,6 +550,31 @@ const styles = StyleSheet.create({
   groupToggleActive: { backgroundColor: colors.accent },
   groupToggleText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
   groupToggleTextActive: { color: '#fff' },
+  selectLink: { fontSize: 13, fontWeight: '600', color: colors.accent },
+  selectionBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginHorizontal: 20,
+    marginBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: radii.item,
+    backgroundColor: colors.surface,
+    ...cardShadow
+  },
+  selectionCount: { fontSize: 13, color: colors.textSecondary, fontWeight: '600' },
+  selectionRemoveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+    backgroundColor: colors.danger
+  },
+  selectionRemoveBtnDisabled: { backgroundColor: colors.textDisabled },
+  selectionRemoveBtnText: { color: '#fff', fontWeight: '700', fontSize: 12 },
   listContent: { paddingHorizontal: 20, paddingBottom: 20 },
   group: { marginBottom: 18 },
   groupHeader: {

@@ -12,8 +12,9 @@ import { refreshAllPodcasts } from './subscriptions'
 import { authHeaderForHost } from './privateFeeds'
 import { getSnapshot, persist, persistNow } from './persistence'
 import type { WindowBounds } from './persistence'
-import { hasSession } from './sync/auth'
-import { pullAndMerge, pushDirty, runSyncCycle } from './sync/sync'
+import { hasSession, ensureFreshSession } from './sync/auth'
+import { pullAndMerge, pushDirtyAndPendingDeletes, runSyncCycle } from './sync/sync'
+import { notifyForeground } from './sync/adapters'
 
 const REFRESH_INTERVAL_MS = 30 * 60 * 1000
 const INITIAL_REFRESH_DELAY_MS = 5000
@@ -71,6 +72,18 @@ function createWindow(): void {
   }
   mainWindow.on('resize', saveBounds)
   mainWindow.on('move', saveBounds)
+
+  // Desktop previously only synced at launch and on a 2-minute interval,
+  // with no equivalent of mobile's foreground-triggered refresh — a window
+  // brought back to the front could sit stale for up to that full interval
+  // even though another device had since pushed an update. Routed through
+  // the shared outbox's foreground adapter (src/main/sync/adapters.ts)
+  // rather than calling runSyncCycle directly, so a focus event also
+  // retries any pending offline write, not just triggers a fresh pull.
+  mainWindow.on('focus', () => {
+    notifyForeground()
+    runSyncCycle().catch((err) => console.error('Foreground sync failed:', err))
+  })
 
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
@@ -131,6 +144,7 @@ app.whenReady().then(async () => {
   // know cloud sync exists. Only runs at all if a session is already saved;
   // an install that's never signed in behaves exactly as it always has.
   if (await hasSession()) {
+    await ensureFreshSession().catch((err) => console.error('Initial session refresh failed:', err))
     await pullAndMerge().catch((err) => console.error('Initial sync pull failed:', err))
   }
   createWindow()
@@ -170,7 +184,7 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   quitting = true
   Promise.race([
-    pushDirty().catch((err) => console.error('Final sync push failed:', err)),
+    pushDirtyAndPendingDeletes().catch((err) => console.error('Final sync push failed:', err)),
     new Promise((resolve) => setTimeout(resolve, QUIT_SYNC_TIMEOUT_MS))
   ]).finally(() => app.quit())
 })

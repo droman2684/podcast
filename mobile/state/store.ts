@@ -2,11 +2,26 @@ import { create } from 'zustand'
 import { AppState as RNAppState } from 'react-native'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import NetInfo from '@react-native-community/netinfo'
-import type { RealtimeChannel } from '@supabase/supabase-js'
 import type { Podcast, Episode, PodcastSettings, Station, PrivateFeed } from '@shared/types'
 import type { DiscoverPodcast } from '@shared/types'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
+import {
+  createLedgerStore,
+  createOutbox,
+  getCurrentUserId,
+  markerFromUpdatedAt,
+  pullAndMerge as enginePullAndMerge,
+  subscribeRealtime as engineSubscribeRealtime,
+  wireOutboxAutoDrain,
+  type LedgerStore,
+  type Outbox
+} from '@shared/sync/engine'
+import { createTableDescriptors, type TableDescriptor, type PodcastRow, type StationRow, type PrivateFeedRow } from '@shared/sync/tables'
+import { withAuthRetry, looksLikeAuthError } from '@shared/sync/authRetry'
+import { fetchAllRows } from '@shared/sync/paging'
+import type { SyncClient } from '@shared/sync/supabaseLike'
 import { supabase } from '../lib/supabase'
+import { createMobileAdapters } from '../lib/syncAdapters'
 import { parseFeed } from '../lib/rss'
 import { downloadEpisode as downloadEpisodeFile, deleteDownload, listDownloadedUris } from '../lib/downloads'
 import { hashId } from '../lib/hash'
@@ -142,120 +157,59 @@ async function saveLastSeenMap(map: Record<string, string>): Promise<void> {
   }
 }
 
-// Mirrors the desktop app's syncUpdatedAt/isRemoteNewer ledger
-// (src/main/sync/sync.ts) — mobile previously had no equivalent, so every
-// pull (loadLibrary, refreshPositions, fetchLatestPosition) blindly trusted
-// whatever the server returned, even a row older than an edit this device
-// already made but hadn't finished uploading. That's what let a quick
-// background/foreground cycle silently roll back a just-made position/queue/
-// played-state change: the edit landed locally, the app foregrounded before
-// the upload finished, and the resulting fetch overwrote it with the
-// stale pre-edit server row. Keyed the same way as desktop
-// ('playbackPosition:<id>', 'episodePlayed:<id>', 'queue') so the concept —
-// "don't accept a remote row unless it's actually newer than what this
-// device already knows" — matches exactly, just persisted to AsyncStorage
-// instead of the main process's disk-backed snapshot.
+// Ledger + outbox now live in the shared sync engine (src/shared/sync/) so
+// this bookkeeping isn't a second, independently-maintained copy of
+// desktop's — see src/main/sync/sync.ts for the same primitives applied to
+// the Electron app. Storage key kept as `.v1` (not bumped) since the
+// on-disk shape (a plain key -> epoch-ms map) hasn't changed, only where the
+// code that reads/writes it lives — an existing user's warm ledger carries
+// over rather than every table looking "unseen" after this update.
 const SYNC_LEDGER_STORAGE_KEY = 'empirepod.syncLedger.v1'
-let syncLedger: Record<string, number> = {}
-// A promise, not a boolean: a plain "already loaded" flag set synchronously
-// before the AsyncStorage read completes would let a second concurrent
-// caller see it as already-loaded and start comparing against the still-
-// empty `syncLedger` while the first call's read is still in flight. Every
-// caller awaiting the same promise ensures nobody proceeds until the read
-// actually finishes, no matter how many call this before the first resolves.
-let syncLedgerLoadPromise: Promise<void> | null = null
+const SYNC_OUTBOX_STORAGE_KEY = 'empirepod.syncOutbox.v1'
 
-function ensureSyncLedgerLoaded(): Promise<void> {
-  if (syncLedgerLoadPromise) return syncLedgerLoadPromise
-  syncLedgerLoadPromise = (async () => {
-    try {
-      const raw = await AsyncStorage.getItem(SYNC_LEDGER_STORAGE_KEY)
-      // Merged rather than replaced: in the unlikely case a touchSync fires
-      // before this read resolves, a plain overwrite here would silently
-      // discard it. Keys already in `syncLedger` (from such a touch) win
-      // over the loaded snapshot, since they're strictly newer.
-      if (raw) syncLedger = { ...(JSON.parse(raw) as Record<string, number>), ...syncLedger }
-    } catch (err) {
-      console.error('[sync] ledger load failed:', err)
-    }
-  })()
-  return syncLedgerLoadPromise
+function syncClient(): SyncClient {
+  return supabase as unknown as SyncClient
 }
 
-// Stamped at the moment of a local edit (default `Date.now()`), independent
-// of whether the matching network write actually succeeds — an edit this
-// device just made is authoritative from this device's point of view
-// whether or not it's reached the server yet, and should resist being
-// overwritten by a pull that only reflects the pre-edit state. Also called
-// with a remote row's own `updated_at` when a pull is accepted, so the next
-// comparison has an up-to-date baseline.
-function touchSync(key: string, ms: number = Date.now()): void {
-  syncLedger[key] = ms
-  AsyncStorage.setItem(SYNC_LEDGER_STORAGE_KEY, JSON.stringify(syncLedger)).catch((err) => {
-    console.error('[sync] ledger save failed:', err)
-  })
+let ledger: LedgerStore | null = null
+function getLedger(): LedgerStore {
+  if (!ledger) ledger = createLedgerStore(createMobileAdapters(syncClient()).storage, SYNC_LEDGER_STORAGE_KEY)
+  return ledger
 }
 
-// Undoes a touchSync when the write it was protecting turned out to fail —
-// otherwise a permanently-failed upload would leave the ledger claiming
-// "this device knows about an edit as of just now" forever, which could
-// block a genuinely newer value from a different device that legitimately
-// won the same window from ever being accepted.
-function revertSync(key: string, previousMs: number | undefined): void {
-  if (previousMs === undefined) delete syncLedger[key]
-  else syncLedger[key] = previousMs
-  AsyncStorage.setItem(SYNC_LEDGER_STORAGE_KEY, JSON.stringify(syncLedger)).catch((err) => {
-    console.error('[sync] ledger save failed:', err)
-  })
-}
-
-function isRemoteNewer(key: string, remoteUpdatedAtIso: string | null | undefined): boolean {
-  if (!remoteUpdatedAtIso) return true
-  const remoteMs = new Date(remoteUpdatedAtIso).getTime()
-  return remoteMs > (syncLedger[key] ?? 0)
+let outbox: Outbox | null = null
+let stopOutboxAutoDrain: (() => void) | null = null
+function getOutbox(): Outbox {
+  if (!outbox) {
+    const adapters = createMobileAdapters(syncClient())
+    outbox = createOutbox(adapters.client, adapters.storage, SYNC_OUTBOX_STORAGE_KEY)
+    stopOutboxAutoDrain?.()
+    stopOutboxAutoDrain = wireOutboxAutoDrain(outbox, adapters)
+  }
+  return outbox
 }
 
 // Tracks an in-flight refreshPositions() call so rapid background/foreground
 // toggling coalesces into the same fetch instead of firing overlapping ones.
 let refreshPositionsInFlight: Promise<void> | null = null
 
-// Live subscriptions started by subscribeRealtime(), torn down by
+// Live subscription handle started by subscribeRealtime(), torn down by
 // unsubscribeRealtime() — module-scoped rather than in Zustand state since
-// these are side-effect handles, not data the UI ever reads.
-let realtimeChannels: RealtimeChannel[] = []
-
-interface PodcastRow {
-  id: string
-  feed_url: string
-  is_private: boolean
-  custom_artwork_url: string | null
-}
-
-interface StationRow {
-  id: string
-  name: string
-  podcast_ids: string[] | null
-  sort_by: string
-  episodes_per_show: number
-}
-
-interface PrivateFeedRow {
-  id: string
-  name: string
-  url: string
-  feed_user: string
-}
+// this is a side-effect handle, not data the UI ever reads.
+let stopRealtimeSync: (() => void) | null = null
 
 async function currentUserId(): Promise<string | null> {
-  const { data } = await supabase.auth.getUser()
-  return data.user?.id ?? null
+  return getCurrentUserId(syncClient())
 }
 
 // The Supabase JS client never throws on a failed write — it resolves with
 // an { error } field instead. Skipping this check (as an earlier version of
 // this file did) makes a failed write look identical to a successful one:
 // the UI updates optimistically, the database never does, and the change
-// silently reverts on the next reload.
+// silently reverts on the next reload. Still used directly for the handful
+// of writes that don't go through the outbox (see markAllPlayed's doc
+// comment) — everything else routes through getOutbox().enqueue(), which
+// does its own equivalent unwrapping internally.
 function unwrap<T>(result: { data: T; error: { message: string } | null }): T {
   if (result.error) throw new Error(result.error.message)
   return result.data
@@ -347,6 +301,11 @@ interface AppState {
 
   addToQueue: (episodeId: string) => Promise<void>
   removeFromQueue: (episodeId: string) => Promise<void>
+  // Bulk counterpart of removeFromQueue — one queue save for the whole
+  // selection instead of N sequential ones, which would otherwise race each
+  // other (each computing "next" from a `queue` snapshot that the previous
+  // call's own set() may not have landed yet).
+  removeManyFromQueue: (episodeIds: string[]) => Promise<void>
   reorderQueue: (episodeIds: string[]) => Promise<void>
 
   // Downloaded audio, keyed by episode id -> local file uri. Device-local
@@ -411,92 +370,51 @@ interface AppState {
   playPreviousInQueue: () => void
 }
 
+// Never throws — a failed push stays durably queued in the outbox and keeps
+// retrying (on reconnect, foreground, and an interval; see
+// lib/syncAdapters.ts) instead of being lost. Callers set `queue` locally
+// right before calling this and no longer roll that optimistic state back
+// on failure: rolling back here would fight the outbox's own retry, showing
+// the user their edit vanish only for the outbox to silently push the very
+// change the UI just discarded once the network recovers.
 async function saveQueue(episodeIds: string[]): Promise<void> {
-  await ensureSyncLedgerLoaded()
+  const ledger = getLedger()
+  await ledger.ensureLoaded()
   // Written to disk immediately, independent of the network call below —
   // same reasoning as savePosition's saveLocalPositions: this is what makes
   // a same-device close/reopen show the right queue even if the write below
   // is slow, fails, or never gets the chance to run before the app closes.
   saveLocalQueue(episodeIds).catch(() => {})
-  // Stamped before the network call even starts (see touchSync's doc
+  // Stamped before the network call even starts (see ledger.touch's doc
   // comment) — every caller sets `queue` locally right before calling this,
   // so this covers addToQueue/removeFromQueue/reorderQueue/loadLibrary's
   // auto-queue in one place.
-  const previousLedgerMs = syncLedger.queue
-  touchSync('queue')
+  ledger.touch('queue')
   const userId = await currentUserId()
   if (!userId) return
-  try {
-    unwrap(
-      await supabase.from('queue').upsert({
-        user_id: userId,
-        episode_ids: episodeIds,
-        updated_at: new Date().toISOString()
-      })
-    )
-    console.log(`[queue] saved order: ${episodeIds.length} episode(s)`)
-  } catch (err) {
-    console.error('[queue] save failed:', err)
-    revertSync('queue', previousLedgerMs)
-    throw err
-  }
+  await getOutbox().enqueue('queue', 'queue', { user_id: userId, episode_ids: episodeIds })
 }
 
 // Always writes the station's full known row rather than a partial patch —
 // simplest way to guarantee sort_by/episodes_per_show (desktop-only station
 // settings mobile never edits) survive a mobile-initiated rename or
-// membership change unchanged.
+// membership change unchanged. Previously an unprotected, fire-and-forget
+// upsert with no ledger entry at all — a station pull/realtime event could
+// clobber an in-flight local rename, and a failed write was lost outright.
+// Now goes through the same ledger + outbox pattern as every other table.
 async function upsertStation(userId: string, station: Station): Promise<void> {
-  unwrap(
-    await supabase.from('stations').upsert({
-      user_id: userId,
-      id: station.id,
-      name: station.name,
-      podcast_ids: station.podcastIds,
-      sort_by: station.sortBy,
-      episodes_per_show: station.episodesPerShow,
-      updated_at: new Date().toISOString(),
-      deleted_at: null
-    })
-  )
-}
-
-const PAGE_SIZE = 1000
-
-// Supabase caps a single .select() at 1000 rows by default — silently, with
-// no error, just a truncated result. episode_played in particular can
-// easily exceed that for a library with a long listening history (one real
-// account here has 16,000+), and a truncated read makes every episode past
-// row 1000 look never-played on the very next reload even though the write
-// succeeded.
-//
-// Pass { count: 'exact' } in the caller's .select() — the first page's
-// response includes the true row count, so every remaining page can be
-// requested in parallel instead of one-at-a-time. 17 sequential round trips
-// for 16,000 rows was taking the better part of a minute; firing the other
-// 16 concurrently once the total is known takes roughly as long as one.
-async function fetchAllRows<T>(
-  query: (
-    from: number,
-    to: number
-  ) => PromiseLike<{ data: T[] | null; error: { message: string } | null; count?: number | null }>
-): Promise<T[]> {
-  const first = await query(0, PAGE_SIZE - 1)
-  if (first.error) throw new Error(first.error.message)
-  const firstPage = first.data ?? []
-  const total = first.count ?? firstPage.length
-  if (total <= firstPage.length) return firstPage
-
-  const remainingStarts: number[] = []
-  for (let from = PAGE_SIZE; from < total; from += PAGE_SIZE) remainingStarts.push(from)
-
-  const restResults = await Promise.all(remainingStarts.map((from) => query(from, from + PAGE_SIZE - 1)))
-  const rest: T[] = []
-  for (const result of restResults) {
-    if (result.error) throw new Error(result.error.message)
-    rest.push(...(result.data ?? []))
-  }
-  return [...firstPage, ...rest]
+  const ledger = getLedger()
+  await ledger.ensureLoaded()
+  ledger.touch(`station:${station.id}`)
+  await getOutbox().enqueue('stations', `station:${station.id}`, {
+    user_id: userId,
+    id: station.id,
+    name: station.name,
+    podcast_ids: station.podcastIds,
+    sort_by: station.sortBy,
+    episodes_per_show: station.episodesPerShow,
+    deleted_at: null
+  })
 }
 
 const FEED_FETCH_CONCURRENCY = 5
@@ -528,7 +446,40 @@ async function mapWithConcurrency<T, R>(
   return results
 }
 
-export const useStore = create<AppState>((set, get) => ({
+export const useStore = create<AppState>((set, get) => {
+  // Shared by loadLibrary's initial pull and subscribeRealtime's live
+  // updates — a podcast tombstoned on another device needs the exact same
+  // local cleanup (drop it, and strip its episodes out of the queue and any
+  // category/Station) whichever path notices it. Previously mobile had no
+  // such cascade at all for a REMOTELY-driven removal: loadLibrary's old
+  // "final sweep" only dropped the podcast/episodes, leaving stale queue and
+  // Station entries dangling on other devices after a remote unsubscribe —
+  // this mirrors the local unsubscribe action's own cascade (below), minus
+  // re-pushing a tombstone that already exists.
+  const applyRemotePodcastTombstone = (podcastId: string): void => {
+    const removedEpisodeIds = new Set((get().episodesByPodcast[podcastId] ?? []).map((e) => e.id))
+    let nextQueue: string[] | null = null
+    set((state) => {
+      nextQueue = state.queue.filter((id) => !removedEpisodeIds.has(id))
+      const { [podcastId]: _removedFeed, ...restPrivateFeeds } = state.privateFeeds
+      const { [podcastId]: _removedMissing, ...restMissing } = state.privateFeedsMissingCredential
+      return {
+        podcasts: state.podcasts.filter((p) => p.id !== podcastId),
+        episodesByPodcast: Object.fromEntries(
+          Object.entries(state.episodesByPodcast).filter(([id]) => id !== podcastId)
+        ),
+        queue: nextQueue,
+        stations: state.stations.map((s) =>
+          s.podcastIds.includes(podcastId) ? { ...s, podcastIds: s.podcastIds.filter((id) => id !== podcastId) } : s
+        ),
+        privateFeeds: restPrivateFeeds,
+        privateFeedsMissingCredential: restMissing
+      }
+    })
+    if (nextQueue) saveLocalQueue(nextQueue).catch(() => {})
+  }
+
+  return {
   authLoading: true,
   authError: null,
   signedIn: false,
@@ -641,6 +592,25 @@ export const useStore = create<AppState>((set, get) => ({
       supabase.auth.onAuthStateChange((_event, session) => {
         set({ signedIn: session !== null, userEmail: session?.user.email ?? null })
       })
+      // Proactively refreshes a session that may have been sitting cached in
+      // AsyncStorage since before this device last closed — backgrounded
+      // rather than blocking first paint on it. If the refresh itself comes
+      // back auth-shaped-broken (e.g. a refresh token minted while this
+      // device's clock was wrong, which keeps failing until real time
+      // catches up no matter how many times it's retried — see
+      // authRetry.ts), the session is unrecoverable on its own: sign out
+      // locally so the user gets a clear re-login prompt instead of a
+      // permanently-broken cached session failing every sync forever, which
+      // is what "JWT issued at future" blocking the Library screen looked
+      // like with no recovery path.
+      if (result.data.session) {
+        supabase.auth.refreshSession().then(({ error }) => {
+          if (error && looksLikeAuthError(error)) {
+            console.error('[initAuth] session unrecoverable on launch, signing out locally:', error.message)
+            supabase.auth.signOut({ scope: 'local' })
+          }
+        })
+      }
     } catch (err) {
       console.error('[initAuth] failed:', err)
       set({
@@ -695,114 +665,107 @@ export const useStore = create<AppState>((set, get) => ({
   loadLibrary: async () => {
     set({ libraryLoading: true, libraryError: null })
     try {
-      await ensureSyncLedgerLoaded()
+      const ledger = getLedger()
+      await ledger.ensureLoaded()
       const userId = await currentUserId()
       if (!userId) throw new Error('Not signed in')
+      const client = syncClient()
 
-      // These six reads are independent of each other — running them in
-      // parallel rather than as sequential awaits removes ~5 network
-      // round-trips worth of latency before RSS fetching even starts.
-      const [podcastRows, positionRows, playedRows, settingsRows, queueResult, privateFeedRows] = await Promise.all([
-        fetchAllRows<PodcastRow>((from, to) =>
-          supabase
-            .from('podcasts')
-            .select('*', { count: 'exact' })
-            .eq('user_id', userId)
-            .is('deleted_at', null)
-            .range(from, to)
-        ),
-        fetchAllRows<{ episode_id: string; position_sec: number; updated_at: string }>((from, to) =>
-          supabase
-            .from('playback_positions')
-            .select('*', { count: 'exact' })
-            .eq('user_id', userId)
-            .range(from, to)
-        ),
-        fetchAllRows<{ episode_id: string; played: boolean; updated_at: string }>((from, to) =>
-          supabase
-            .from('episode_played')
-            .select('*', { count: 'exact' })
-            .eq('user_id', userId)
-            .range(from, to)
-        ),
-        fetchAllRows<{ podcast_id: string; notify: boolean; last_seen_pub_date: string | null }>((from, to) =>
-          supabase
-            .from('podcast_settings')
-            .select('*', { count: 'exact' })
-            .eq('user_id', userId)
-            .range(from, to)
-        ),
-        supabase.from('queue').select('*').eq('user_id', userId).maybeSingle(),
-        fetchAllRows<PrivateFeedRow>((from, to) =>
-          supabase
-            .from('private_feeds')
-            .select('*', { count: 'exact' })
-            .eq('user_id', userId)
-            .is('deleted_at', null)
-            .range(from, to)
-        )
-      ])
-      console.log(`[loadLibrary] ${podcastRows.length} non-deleted podcast row(s)`)
-
-      const privateFeeds: Record<string, PrivateFeed> = {}
-      for (const row of privateFeedRows) {
-        privateFeeds[row.id] = { id: row.id, name: row.name, url: row.url, user: row.feed_user }
-      }
-
-      // Per-key gated by the sync ledger (see isRemoteNewer's doc comment):
-      // a server row only overwrites what this device already knows if it's
-      // actually newer than the last edit/pull this device recorded for
-      // that key. A row that fails the gate is simply left out of these
-      // objects, so the merges below fall through to whatever's already in
-      // state — a position/queue edit this device made but hasn't finished
-      // uploading yet survives instead of being silently rolled back by a
-      // fetch that only reflects the pre-edit state.
+      // Buffers filled by the shared engine's applyRow callbacks below, then
+      // committed in one `set()` — same single-commit shape as before, now
+      // gated uniformly through the shared ledger for every table instead of
+      // only positions/queue/episode_played being protected.
       const positions: Record<string, number> = {}
-      for (const row of positionRows) {
-        const key = `playbackPosition:${row.episode_id}`
-        if (!isRemoteNewer(key, row.updated_at)) continue
-        positions[row.episode_id] = row.position_sec
-        touchSync(key, new Date(row.updated_at).getTime())
-      }
-
-      const playedRowByEpisode = new Map(playedRows.map((r) => [r.episode_id, r]))
-      console.log(
-        `[loadLibrary] ${playedRows.length} episode_played row(s), ${playedRows.filter((r) => r.played).length} marked played`
-      )
-
       const podcastSettings: Record<string, PodcastSettings> = {}
       // The synced counterpart of `lastSeen` below — see loadLastSeenMap's
       // doc comment for why a per-device-only mark isn't enough.
       const remoteLastSeen: Record<string, string> = {}
-      for (const row of settingsRows) {
-        podcastSettings[row.podcast_id] = { notify: row.notify }
-        if (row.last_seen_pub_date) remoteLastSeen[row.podcast_id] = row.last_seen_pub_date
-      }
+      const privateFeeds: Record<string, PrivateFeed> = {}
+      let remoteQueue: string[] | null = null
 
-      const queueRow = unwrap(queueResult)
-      const acceptQueue = isRemoteNewer('queue', queueRow?.updated_at)
-      const remoteQueue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
-      if (acceptQueue && queueRow?.updated_at) touchSync('queue', new Date(queueRow.updated_at).getTime())
+      const otherDescriptors = createTableDescriptors({
+        onPodcastSettingsRow: (row) => {
+          podcastSettings[row.podcast_id] = { notify: row.notify }
+          if (row.last_seen_pub_date) remoteLastSeen[row.podcast_id] = row.last_seen_pub_date
+        },
+        onQueueRow: (row) => {
+          remoteQueue = Array.isArray(row.episode_ids) ? row.episode_ids : []
+        },
+        onPlaybackPositionRow: (row) => {
+          positions[row.episode_id] = row.position_sec
+        },
+        onPrivateFeedRow: (row) => {
+          privateFeeds[row.id] = {
+            id: row.id,
+            name: row.name ?? row.url ?? '',
+            url: row.url ?? '',
+            user: row.feed_user ?? ''
+          }
+        },
+        // A tombstoned identity simply isn't re-added to `privateFeeds`
+        // above — the `set()` below replaces the whole map with what was
+        // just built, so omitting it here is enough to drop it.
+        onPrivateFeedTombstone: () => {}
+      })
+
+      // Podcasts and episode_played are pulled separately (not through the
+      // generic loop above): podcasts' RSS fetch below needs to fan out with
+      // bounded concurrency (see FEED_FETCH_CONCURRENCY), and episode_played
+      // rows need to be applied only once their episodes actually exist
+      // locally, which doesn't happen until that same RSS fetch completes.
+      // Podcasts fetch ALL rows (not filtered to non-deleted) so a tombstone
+      // is handled the same explicit way a pull or realtime event handles
+      // one everywhere else — see tables.ts's doc comment on deletion.
+      const [, rawPodcastRows, playedRows] = await Promise.all([
+        enginePullAndMerge(client, ledger, userId, otherDescriptors, markerFromUpdatedAt),
+        fetchAllRows<Record<string, unknown>>((from, to) =>
+          withAuthRetry(client, () =>
+            client.from('podcasts').select('*', { count: 'exact' }).eq('user_id', userId).range(from, to)
+          )
+        ),
+        fetchAllRows<Record<string, unknown>>((from, to) =>
+          withAuthRetry(client, () =>
+            client.from('episode_played').select('*', { count: 'exact' }).eq('user_id', userId).range(from, to)
+          )
+        )
+      ])
+      const podcastRows = rawPodcastRows as unknown as PodcastRow[]
+      const typedPlayedRows = playedRows as unknown as { episode_id: string; played: boolean; updated_at: string }[]
+      console.log(`[loadLibrary] ${podcastRows.length} podcast row(s)`)
+
+      for (const row of podcastRows) {
+        if (row.deleted_at === null) continue
+        const key = `podcast:${row.id}`
+        const marker = markerFromUpdatedAt(row)
+        if (!ledger.isNewer(key, marker)) continue
+        ledger.touch(key, marker)
+        applyRemotePodcastTombstone(row.id)
+      }
+      const activeRows = podcastRows.filter((row) => row.deleted_at === null)
+
+      const playedRowByEpisode = new Map(typedPlayedRows.map((r) => [r.episode_id, r]))
+      console.log(
+        `[loadLibrary] ${typedPlayedRows.length} episode_played row(s), ${typedPlayedRows.filter((r) => r.played).length} marked played`
+      )
 
       // Local cache first, remote second: remote wins for any episode it
       // has a newer row for, but a position saved locally on this device
       // that hasn't reached the server yet (offline, or just not pushed at
       // the moment the app closed) must survive this merge rather than
       // being wiped out by a fetch that only reflects the pre-edit state.
-      if (acceptQueue) saveLocalQueue(remoteQueue).catch(() => {})
+      if (remoteQueue) saveLocalQueue(remoteQueue).catch(() => {})
       set((state) => {
         const merged = { ...state.positions, ...positions }
         saveLocalPositions(merged).catch(() => {})
         return {
           positions: merged,
           podcastSettings,
-          queue: acceptQueue ? remoteQueue : state.queue,
+          queue: remoteQueue ?? state.queue,
           privateFeeds
         }
       })
 
-      const allRows = podcastRows ?? []
-      const rowOrder = new Map(allRows.map((row, i) => [row.id, i]))
+      const rowOrder = new Map(activeRows.map((row, i) => [row.id, i]))
       const missingCredential: Record<string, boolean> = {}
 
       // Merges each feed into the store as soon as it's parsed, instead of
@@ -835,9 +798,23 @@ export const useStore = create<AppState>((set, get) => ({
       const lastSeenAdvances: Record<string, string> = {}
 
       await mapWithConcurrency(
-        allRows,
+        activeRows,
         FEED_FETCH_CONCURRENCY,
         async (row) => {
+          // Ledger-gated exactly like every other table now (previously
+          // podcasts had no protection at all) — an in-flight local edit to
+          // custom_artwork_url survives a pull that only reflects the
+          // pre-edit row. The RSS fetch/episode merge below still always
+          // runs for every active subscription regardless of this gate,
+          // since episode content isn't something Supabase has an opinion on.
+          const key = `podcast:${row.id}`
+          const marker = markerFromUpdatedAt(row)
+          const acceptIdentity = ledger.isNewer(key, marker)
+          if (acceptIdentity) ledger.touch(key, marker)
+          const customArtworkUrl = acceptIdentity
+            ? row.custom_artwork_url
+            : (get().podcasts.find((p) => p.id === row.id)?.customArtworkUrl ?? null)
+
           // A private feed with no locally-saved credential (synced from
           // another device, never unlocked on this one) can't be fetched —
           // show it as a placeholder using the identity synced via
@@ -854,7 +831,7 @@ export const useStore = create<AppState>((set, get) => ({
                 name: identity?.name ?? identity?.url ?? row.feed_url,
                 author: '',
                 artworkUrl: null,
-                customArtworkUrl: row.custom_artwork_url,
+                customArtworkUrl,
                 description: '',
                 category: null,
                 unread: 0,
@@ -878,8 +855,8 @@ export const useStore = create<AppState>((set, get) => ({
             const episodes = parsed.episodes.map((e) => {
               const playedRow = playedRowByEpisode.get(e.id)
               const key = `episodePlayed:${e.id}`
-              if (playedRow && isRemoteNewer(key, playedRow.updated_at)) {
-                touchSync(key, new Date(playedRow.updated_at).getTime())
+              if (playedRow && ledger.isNewer(key, new Date(playedRow.updated_at).getTime())) {
+                ledger.touch(key, new Date(playedRow.updated_at).getTime())
                 return { ...e, played: playedRow.played }
               }
               return { ...e, played: previousPlayedById.get(e.id) ?? playedRow?.played ?? false }
@@ -890,7 +867,7 @@ export const useStore = create<AppState>((set, get) => ({
               name: parsed.name,
               author: parsed.author,
               artworkUrl: parsed.artworkUrl,
-              customArtworkUrl: row.custom_artwork_url,
+              customArtworkUrl,
               description: parsed.description,
               category: parsed.category,
               unread: episodes.filter((e) => !e.played).length,
@@ -933,15 +910,18 @@ export const useStore = create<AppState>((set, get) => ({
         const now = new Date().toISOString()
         try {
           unwrap(
-            await supabase.from('podcast_settings').upsert(
-              advanceEntries.map(([podcastId, pubDate]) => ({
-                user_id: userId,
-                podcast_id: podcastId,
-                last_seen_pub_date: pubDate,
-                updated_at: now
-              }))
+            await withAuthRetry(client, () =>
+              supabase.from('podcast_settings').upsert(
+                advanceEntries.map(([podcastId, pubDate]) => ({
+                  user_id: userId,
+                  podcast_id: podcastId,
+                  last_seen_pub_date: pubDate,
+                  updated_at: now
+                }))
+              )
             )
           )
+          for (const [podcastId] of advanceEntries) ledger.touch(`podcastSettings:${podcastId}`, new Date(now).getTime())
         } catch (err) {
           // Non-fatal — this device's local `lastSeen` cache (just saved
           // above) still prevents it from re-treating these episodes as
@@ -967,7 +947,11 @@ export const useStore = create<AppState>((set, get) => ({
 
       // Final sweep to drop any podcast that's no longer subscribed (e.g.
       // unsubscribed from another device since the last load) — mergeFeed
-      // above only ever adds/updates entries for rows that are still there.
+      // above only ever adds/updates entries for rows that are still there,
+      // and applyRemotePodcastTombstone above only fires for a tombstone the
+      // ledger accepted as newer. This is a redundant safety net covering
+      // any other reason a podcast might be locally present but absent from
+      // `activeRows`.
       set((state) => ({
         podcasts: state.podcasts.filter((p) => rowOrder.has(p.id)),
         episodesByPodcast: Object.fromEntries(
@@ -984,17 +968,26 @@ export const useStore = create<AppState>((set, get) => ({
   subscribe: async (podcast) => {
     const userId = await currentUserId()
     if (!userId) throw new Error('Not signed in')
+    // Kept as a direct, throw-on-failure write (not routed through the
+    // outbox) rather than mobile's usual fire-and-forget pattern — the
+    // loadLibrary() call right below assumes this podcast now exists in
+    // Supabase, so a caller here needs to actually know whether it failed
+    // rather than have it silently queued for later while loadLibrary finds
+    // nothing new to show.
     unwrap(
-      await supabase.from('podcasts').upsert({
-        user_id: userId,
-        id: podcast.id,
-        feed_url: podcast.feedUrl,
-        is_private: false,
-        custom_artwork_url: null,
-        updated_at: new Date().toISOString(),
-        deleted_at: null
-      })
+      await withAuthRetry(syncClient(), () =>
+        supabase.from('podcasts').upsert({
+          user_id: userId,
+          id: podcast.id,
+          feed_url: podcast.feedUrl,
+          is_private: false,
+          custom_artwork_url: null,
+          updated_at: new Date().toISOString(),
+          deleted_at: null
+        })
+      )
     )
+    getLedger().touch(`podcast:${podcast.id}`)
     await get().loadLibrary()
   },
 
@@ -1027,31 +1020,29 @@ export const useStore = create<AppState>((set, get) => ({
       }
     })
     const now = new Date().toISOString()
-    try {
-      unwrap(
-        await supabase
-          .from('podcasts')
-          .upsert({ user_id: userId, id: podcastId, deleted_at: now, updated_at: now })
-      )
-      console.log(`[unsubscribe] tombstoned ${podcastId}`)
-    } catch (err) {
-      console.error(`[unsubscribe] tombstone failed for ${podcastId}:`, err)
-    }
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
+    ledger.touch(`podcast:${podcastId}`)
+    // Routed through the outbox (never rejects — see its doc comment) so a
+    // tombstone made while offline durably retries instead of only logging
+    // and being lost, which is what the old try/catch-and-log here did.
+    await getOutbox().enqueue('podcasts', `podcast:${podcastId}`, {
+      user_id: userId,
+      id: podcastId,
+      deleted_at: now
+    })
     if (isPrivate) {
       // Mirrors desktop's removePrivateFeed: the podcast row and the
       // private_feeds identity row are two separate synced rows for the
       // same feed, so both need a tombstone or the identity would dangle
       // on every other device. The credential only ever lived on this
       // device, so it's just deleted, not synced anywhere.
-      try {
-        unwrap(
-          await supabase
-            .from('private_feeds')
-            .upsert({ user_id: userId, id: podcastId, deleted_at: now, updated_at: now })
-        )
-      } catch (err) {
-        console.error(`[unsubscribe] private_feeds tombstone failed for ${podcastId}:`, err)
-      }
+      ledger.touch(`privateFeed:${podcastId}`)
+      await getOutbox().enqueue('private_feeds', `privateFeed:${podcastId}`, {
+        user_id: userId,
+        id: podcastId,
+        deleted_at: now
+      })
       await deletePrivateFeedCredential(podcastId)
     }
     if (queueChanged) await saveQueue(nextQueue)
@@ -1080,28 +1071,39 @@ export const useStore = create<AppState>((set, get) => ({
     await savePrivateFeedCredential(id, user, password)
 
     const now = new Date().toISOString()
+    const client = syncClient()
+    // Direct, throw-on-failure writes (see subscribe's doc comment for why
+    // these two skip the outbox) — loadLibrary() below assumes both rows
+    // already exist.
     unwrap(
-      await supabase.from('podcasts').upsert({
-        user_id: userId,
-        id,
-        feed_url: url,
-        is_private: true,
-        custom_artwork_url: null,
-        updated_at: now,
-        deleted_at: null
-      })
+      await withAuthRetry(client, () =>
+        supabase.from('podcasts').upsert({
+          user_id: userId,
+          id,
+          feed_url: url,
+          is_private: true,
+          custom_artwork_url: null,
+          updated_at: now,
+          deleted_at: null
+        })
+      )
     )
     unwrap(
-      await supabase.from('private_feeds').upsert({
-        user_id: userId,
-        id,
-        name,
-        url,
-        feed_user: user,
-        updated_at: now,
-        deleted_at: null
-      })
+      await withAuthRetry(client, () =>
+        supabase.from('private_feeds').upsert({
+          user_id: userId,
+          id,
+          name,
+          url,
+          feed_user: user,
+          updated_at: now,
+          deleted_at: null
+        })
+      )
     )
+    const ledger = getLedger()
+    ledger.touch(`podcast:${id}`)
+    ledger.touch(`privateFeed:${id}`)
 
     await get().loadLibrary()
   },
@@ -1119,116 +1121,135 @@ export const useStore = create<AppState>((set, get) => ({
     await get().loadLibrary()
   },
 
+  // Never rejects (see getOutbox().enqueue's doc comment) — a failed save
+  // stays durably queued and keeps retrying instead of the optimistic
+  // toggle being rolled back only for the outbox to silently reapply it
+  // once the network recovers.
   setNotify: async (podcastId, notify) => {
-    const previous = get().podcastSettings[podcastId]?.notify ?? false
     set((state) => ({
       podcastSettings: { ...state.podcastSettings, [podcastId]: { notify } }
     }))
     const userId = await currentUserId()
     if (!userId) return
-    try {
-      unwrap(
-        await supabase.from('podcast_settings').upsert({
-          user_id: userId,
-          podcast_id: podcastId,
-          notify,
-          updated_at: new Date().toISOString()
-        })
-      )
-    } catch (err) {
-      console.error(`[notify] save failed for ${podcastId}:`, err)
-      set((state) => ({
-        podcastSettings: { ...state.podcastSettings, [podcastId]: { notify: previous } }
-      }))
-      throw err
-    }
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
+    ledger.touch(`podcastSettings:${podcastId}`)
+    await getOutbox().enqueue('podcast_settings', `podcastSettings:${podcastId}`, {
+      user_id: userId,
+      podcast_id: podcastId,
+      notify
+    })
   },
 
+  // Wires one Realtime channel per syncable table via the shared engine
+  // (src/shared/sync/engine.ts) — previously only playback_positions/queue/
+  // episode_played had live updates here; podcasts/podcast_settings/
+  // stations/private_feeds only ever caught up on the next full
+  // loadLibrary(). `podcasts` specifically defers to loadLibrary() itself
+  // (rather than a targeted single-row update like the others) since a new
+  // or changed subscription needs the same RSS fetch loadLibrary already
+  // knows how to do — duplicating that here isn't worth it for a
+  // comparatively rare event.
   subscribeRealtime: async () => {
-    if (realtimeChannels.length > 0) return
-    await ensureSyncLedgerLoaded()
+    if (stopRealtimeSync) return
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
     const userId = await currentUserId()
     if (!userId) return
+    const client = syncClient()
 
-    const positionsChannel = supabase
-      .channel(`rt-positions-${userId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'playback_positions', filter: `user_id=eq.${userId}` },
-        (payload) => {
-          const row = payload.new as
-            | { episode_id: string; position_sec: number; updated_at: string }
-            | undefined
-          if (!row?.episode_id) return
-          const key = `playbackPosition:${row.episode_id}`
-          if (!isRemoteNewer(key, row.updated_at)) return
-          touchSync(key, new Date(row.updated_at).getTime())
-          set((state) => {
-            const merged = { ...state.positions, [row.episode_id]: row.position_sec }
-            saveLocalPositions(merged).catch(() => {})
-            return { positions: merged }
-          })
+    const descriptors = createTableDescriptors({
+      onPodcastRow: () => {
+        void get().loadLibrary()
+      },
+      onPodcastTombstone: (row) => {
+        applyRemotePodcastTombstone(row.id)
+      },
+      onPodcastSettingsRow: (row) => {
+        set((state) => ({
+          podcastSettings: { ...state.podcastSettings, [row.podcast_id]: { notify: row.notify } }
+        }))
+      },
+      onStationRow: (row) => {
+        const station: Station = {
+          id: row.id,
+          name: row.name ?? 'Untitled Station',
+          podcastIds: Array.isArray(row.podcast_ids) ? row.podcast_ids : [],
+          sortBy: (['newest', 'oldest', 'shortest', 'longest'] as const).includes(row.sort_by as never)
+            ? (row.sort_by as Station['sortBy'])
+            : 'newest',
+          episodesPerShow: typeof row.episodes_per_show === 'number' ? row.episodes_per_show : 5
         }
-      )
-      .subscribe()
-
-    const queueChannel = supabase
-      .channel(`rt-queue-${userId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'queue', filter: `user_id=eq.${userId}` },
-        (payload) => {
-          const row = payload.new as { episode_ids: string[]; updated_at: string } | undefined
-          if (!row) return
-          if (!isRemoteNewer('queue', row.updated_at)) return
-          touchSync('queue', new Date(row.updated_at).getTime())
-          const next = Array.isArray(row.episode_ids) ? row.episode_ids : []
-          saveLocalQueue(next).catch(() => {})
-          set({ queue: next })
-        }
-      )
-      .subscribe()
-
-    const playedChannel = supabase
-      .channel(`rt-played-${userId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'episode_played', filter: `user_id=eq.${userId}` },
-        (payload) => {
-          const row = payload.new as
-            | { episode_id: string; podcast_id: string; played: boolean; updated_at: string }
-            | undefined
-          if (!row?.episode_id) return
-          const key = `episodePlayed:${row.episode_id}`
-          if (!isRemoteNewer(key, row.updated_at)) return
-          touchSync(key, new Date(row.updated_at).getTime())
-          set((state) => {
-            const episodes = state.episodesByPodcast[row.podcast_id]
-            const idx = episodes?.findIndex((e) => e.id === row.episode_id) ?? -1
-            if (!episodes || idx === -1) return {}
-            const updated = [...episodes]
-            updated[idx] = { ...updated[idx], played: row.played }
-            return {
-              episodesByPodcast: { ...state.episodesByPodcast, [row.podcast_id]: updated },
-              podcasts: state.podcasts.map((p) =>
-                p.id === row.podcast_id ? { ...p, unread: updated.filter((e) => !e.played).length } : p
-              )
+        set((state) => ({
+          stations: [...state.stations.filter((s) => s.id !== station.id), station]
+        }))
+      },
+      onStationTombstone: (row) => {
+        set((state) => ({ stations: state.stations.filter((s) => s.id !== row.id) }))
+      },
+      onQueueRow: (row) => {
+        const next = Array.isArray(row.episode_ids) ? row.episode_ids : []
+        saveLocalQueue(next).catch(() => {})
+        set({ queue: next })
+      },
+      onPlaybackPositionRow: (row) => {
+        set((state) => {
+          const merged = { ...state.positions, [row.episode_id]: row.position_sec }
+          saveLocalPositions(merged).catch(() => {})
+          return { positions: merged }
+        })
+      },
+      onEpisodePlayedRow: (row) => {
+        set((state) => {
+          const episodes = state.episodesByPodcast[row.podcast_id]
+          const idx = episodes?.findIndex((e) => e.id === row.episode_id) ?? -1
+          if (!episodes || idx === -1) return {}
+          const updated = [...episodes]
+          updated[idx] = { ...updated[idx], played: row.played }
+          return {
+            episodesByPodcast: { ...state.episodesByPodcast, [row.podcast_id]: updated },
+            podcasts: state.podcasts.map((p) =>
+              p.id === row.podcast_id ? { ...p, unread: updated.filter((e) => !e.played).length } : p
+            )
+          }
+        })
+      },
+      onPrivateFeedRow: (row) => {
+        set((state) => ({
+          privateFeeds: {
+            ...state.privateFeeds,
+            [row.id]: {
+              id: row.id,
+              name: row.name ?? state.privateFeeds[row.id]?.name ?? row.url ?? '',
+              url: row.url ?? state.privateFeeds[row.id]?.url ?? '',
+              user: row.feed_user ?? state.privateFeeds[row.id]?.user ?? ''
             }
-          })
-        }
-      )
-      .subscribe()
+          }
+        }))
+      },
+      onPrivateFeedTombstone: (row) => {
+        set((state) => {
+          const { [row.id]: _removed, ...rest } = state.privateFeeds
+          return { privateFeeds: rest }
+        })
+      }
+    })
 
-    realtimeChannels = [positionsChannel, queueChannel, playedChannel]
+    stopRealtimeSync = engineSubscribeRealtime(client, ledger, userId, descriptors, markerFromUpdatedAt)
   },
 
   unsubscribeRealtime: () => {
-    for (const channel of realtimeChannels) supabase.removeChannel(channel)
-    realtimeChannels = []
+    stopRealtimeSync?.()
+    stopRealtimeSync = null
   },
 
+  // Never rejects — see getOutbox().enqueue's doc comment. A failed save
+  // stays durably queued (retried on reconnect/foreground/interval) instead
+  // of being silently lost, which is what the old unhandled-catch-and-log
+  // here amounted to.
   savePosition: async (episodeId, positionSec) => {
-    await ensureSyncLedgerLoaded()
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
     const next = { ...get().positions, [episodeId]: positionSec }
     set({ positions: next })
     // Written to disk immediately and independently of the network call
@@ -1236,42 +1257,35 @@ export const useStore = create<AppState>((set, get) => ({
     // correctly even if the Supabase write below is slow, fails, or never
     // gets the chance to run before the app is killed.
     saveLocalPositions(next).catch(() => {})
-    // Stamped now, before the network call even starts — see touchSync's
+    // Stamped now, before the network call even starts — see ledger.touch's
     // doc comment. Protects this edit from being rolled back by a
     // loadLibrary/refreshPositions fetch that lands before the upload below
     // finishes (e.g. this device backgrounding right after a save).
-    touchSync(`playbackPosition:${episodeId}`)
+    ledger.touch(`playbackPosition:${episodeId}`)
     const userId = await currentUserId()
     if (!userId) return
-    try {
-      unwrap(
-        await supabase.from('playback_positions').upsert({
-          user_id: userId,
-          episode_id: episodeId,
-          position_sec: positionSec,
-          updated_at: new Date().toISOString()
-        })
-      )
-    } catch (err) {
-      // Was silently swallowed before (an unhandled rejection from the
-      // AudioEngine save interval, since nothing there awaited or caught
-      // this) — a failed save here is exactly what "acts like I never
-      // listened to it" looks like, so it needs to be visible.
-      console.error(`[position] save failed for ${episodeId}:`, err)
-    }
+    await getOutbox().enqueue('playback_positions', `playbackPosition:${episodeId}`, {
+      user_id: userId,
+      episode_id: episodeId,
+      position_sec: positionSec
+    })
   },
 
   fetchLatestPosition: async (episodeId) => {
-    await ensureSyncLedgerLoaded()
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
     const userId = await currentUserId()
     if (!userId) return null
     try {
-      const { data, error } = await supabase
-        .from('playback_positions')
-        .select('position_sec, updated_at')
-        .eq('user_id', userId)
-        .eq('episode_id', episodeId)
-        .maybeSingle()
+      const client = syncClient()
+      const { data, error } = await withAuthRetry(client, () =>
+        supabase
+          .from('playback_positions')
+          .select('position_sec, updated_at')
+          .eq('user_id', userId)
+          .eq('episode_id', episodeId)
+          .maybeSingle()
+      )
       if (error) throw new Error(error.message)
       if (!data) return null
       // Not newer than what this device already knows (e.g. this device's
@@ -1280,8 +1294,9 @@ export const useStore = create<AppState>((set, get) => ({
       // its own local `positions` cache, which the ledger says is already
       // at least as current.
       const key = `playbackPosition:${episodeId}`
-      if (!isRemoteNewer(key, data.updated_at)) return null
-      touchSync(key, new Date(data.updated_at).getTime())
+      const marker = markerFromUpdatedAt(data)
+      if (!ledger.isNewer(key, marker)) return null
+      ledger.touch(key, marker)
       const sec = data.position_sec
       set((state) => ({ positions: { ...state.positions, [episodeId]: sec } }))
       return sec
@@ -1299,36 +1314,28 @@ export const useStore = create<AppState>((set, get) => ({
     // shorter-lived one's (possibly staler) result landing after the other.
     if (refreshPositionsInFlight) return refreshPositionsInFlight
     refreshPositionsInFlight = (async () => {
-      await ensureSyncLedgerLoaded()
+      const ledger = getLedger()
+      await ledger.ensureLoaded()
       const userId = await currentUserId()
       if (!userId) return
       try {
-        const [positionRows, queueResult] = await Promise.all([
-          fetchAllRows<{ episode_id: string; position_sec: number; updated_at: string }>((from, to) =>
-            supabase
-              .from('playback_positions')
-              .select('*', { count: 'exact' })
-              .eq('user_id', userId)
-              .range(from, to)
-          ),
-          supabase.from('queue').select('*').eq('user_id', userId).maybeSingle()
-        ])
+        const client = syncClient()
         const positions: Record<string, number> = {}
-        for (const row of positionRows) {
-          const key = `playbackPosition:${row.episode_id}`
-          if (!isRemoteNewer(key, row.updated_at)) continue
-          positions[row.episode_id] = row.position_sec
-          touchSync(key, new Date(row.updated_at).getTime())
-        }
-        const queueRow = unwrap(queueResult)
-        const acceptQueue = isRemoteNewer('queue', queueRow?.updated_at)
-        const remoteQueue: string[] = Array.isArray(queueRow?.episode_ids) ? queueRow.episode_ids : []
-        if (acceptQueue && queueRow?.updated_at) touchSync('queue', new Date(queueRow.updated_at).getTime())
-        if (acceptQueue) saveLocalQueue(remoteQueue).catch(() => {})
+        let remoteQueue: string[] | null = null
+        const descriptors = createTableDescriptors({
+          onPlaybackPositionRow: (row) => {
+            positions[row.episode_id] = row.position_sec
+          },
+          onQueueRow: (row) => {
+            remoteQueue = Array.isArray(row.episode_ids) ? row.episode_ids : []
+          }
+        })
+        await enginePullAndMerge(client, ledger, userId, descriptors, markerFromUpdatedAt)
+        if (remoteQueue) saveLocalQueue(remoteQueue).catch(() => {})
         set((state) => {
           const merged = { ...state.positions, ...positions }
           saveLocalPositions(merged).catch(() => {})
-          return { positions: merged, queue: acceptQueue ? remoteQueue : state.queue }
+          return { positions: merged, queue: remoteQueue ?? state.queue }
         })
       } catch (err) {
         console.error('[refreshPositions] failed:', err)
@@ -1341,16 +1348,18 @@ export const useStore = create<AppState>((set, get) => ({
     }
   },
 
+  // Never rejects — see getOutbox().enqueue's doc comment. No longer rolls
+  // the optimistic played-state back on a save failure: the write stays
+  // durably queued and retries instead, so the toggle the user saw succeed
+  // doesn't flip back only for the outbox to silently reapply it later.
   setPlayed: async (episodeId, podcastId, played) => {
-    await ensureSyncLedgerLoaded()
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
     const key = `episodePlayed:${episodeId}`
-    const previousLedgerMs = syncLedger[key]
-    let previousPlayed = played
     set((state) => {
-      const episodes = (state.episodesByPodcast[podcastId] ?? []).map((e) => {
-        if (e.id === episodeId) previousPlayed = e.played
-        return e.id === episodeId ? { ...e, played } : e
-      })
+      const episodes = (state.episodesByPodcast[podcastId] ?? []).map((e) =>
+        e.id === episodeId ? { ...e, played } : e
+      )
       return {
         episodesByPodcast: { ...state.episodesByPodcast, [podcastId]: episodes },
         podcasts: state.podcasts.map((p) =>
@@ -1360,47 +1369,25 @@ export const useStore = create<AppState>((set, get) => ({
     })
     // Stamped now, before the network call — protects this edit from being
     // reverted by a loadLibrary that lands before the upload below finishes
-    // (see isRemoteNewer's doc comment and loadLibrary's played-state gate).
-    touchSync(key)
+    // (see ledger.isNewer's doc comment and loadLibrary's played-state gate).
+    ledger.touch(key)
     const userId = await currentUserId()
     if (!userId) return
-    try {
-      unwrap(
-        await supabase.from('episode_played').upsert({
-          user_id: userId,
-          episode_id: episodeId,
-          podcast_id: podcastId,
-          played,
-          updated_at: new Date().toISOString()
-        })
-      )
-      console.log(`[played] saved ${episodeId} -> ${played}`)
-    } catch (err) {
-      // Roll back rather than leave this device claiming "played" (or
-      // "unplayed") when that never actually reached the server — previously
-      // this stayed silently applied only on this device until some later
-      // loadLibrary happened to overwrite it back, with no indication to
-      // the user that the toggle they saw succeed hadn't actually saved.
-      console.error(`[played] save failed for ${episodeId}:`, err)
-      revertSync(key, previousLedgerMs)
-      set((state) => {
-        const episodes = (state.episodesByPodcast[podcastId] ?? []).map((e) =>
-          e.id === episodeId ? { ...e, played: previousPlayed } : e
-        )
-        return {
-          episodesByPodcast: { ...state.episodesByPodcast, [podcastId]: episodes },
-          podcasts: state.podcasts.map((p) =>
-            p.id === podcastId ? { ...p, unread: episodes.filter((e) => !e.played).length } : p
-          )
-        }
-      })
-      throw err
-    }
+    await getOutbox().enqueue('episode_played', key, {
+      user_id: userId,
+      episode_id: episodeId,
+      podcast_id: podcastId,
+      played
+    })
   },
 
   // One batched upsert for the whole show rather than one request per
-  // episode — the desktop sync's initial push made the same mistake at
-  // scale (thousands of individual requests) before being fixed to batch.
+  // episode (the desktop sync's initial push made the same mistake at scale
+  // before being fixed to batch) — bypasses the outbox's one-payload-per-key
+  // shape for this reason, wrapped in withAuthRetry directly instead. Still
+  // throws on failure (unlike the per-episode actions above): this is a
+  // deliberate, one-off bulk action the user is actively waiting on, not a
+  // steady-state background save, so immediate feedback is the right call.
   markAllPlayed: async (podcastId) => {
     const episodes = get().episodesByPodcast[podcastId] ?? []
     const unplayed = episodes.filter((e) => !e.played)
@@ -1411,14 +1398,16 @@ export const useStore = create<AppState>((set, get) => ({
     const updatedAt = new Date().toISOString()
     try {
       unwrap(
-        await supabase.from('episode_played').upsert(
-          unplayed.map((e) => ({
-            user_id: userId,
-            episode_id: e.id,
-            podcast_id: podcastId,
-            played: true,
-            updated_at: updatedAt
-          }))
+        await withAuthRetry(syncClient(), () =>
+          supabase.from('episode_played').upsert(
+            unplayed.map((e) => ({
+              user_id: userId,
+              episode_id: e.id,
+              podcast_id: podcastId,
+              played: true,
+              updated_at: updatedAt
+            }))
+          )
         )
       )
     } catch (err) {
@@ -1426,8 +1415,9 @@ export const useStore = create<AppState>((set, get) => ({
       throw err
     }
 
+    const ledger = getLedger()
     const updatedAtMs = new Date(updatedAt).getTime()
-    for (const e of unplayed) touchSync(`episodePlayed:${e.id}`, updatedAtMs)
+    for (const e of unplayed) ledger.touch(`episodePlayed:${e.id}`, updatedAtMs)
 
     set((state) => {
       const updated = (state.episodesByPodcast[podcastId] ?? []).map((e) => ({ ...e, played: true }))
@@ -1438,44 +1428,33 @@ export const useStore = create<AppState>((set, get) => ({
     })
   },
 
+  // saveQueue never rejects (durable outbox — see its doc comment), so
+  // there's nothing to roll back to here anymore: the optimistic queue
+  // state IS what gets pushed, eventually, no matter how long that takes.
   addToQueue: async (episodeId) => {
     if (get().queue.includes(episodeId)) return
-    const previous = get().queue
-    const next = [...previous, episodeId]
+    const next = [...get().queue, episodeId]
     set({ queue: next })
-    try {
-      await saveQueue(next)
-    } catch (err) {
-      // Roll back rather than leave this device showing a queue the server
-      // never received — otherwise the episode looks added here but is
-      // silently missing again on any other device, with nothing to
-      // indicate the add didn't actually persist.
-      set((state) => ({ queue: state.queue === next ? previous : state.queue }))
-      throw err
-    }
+    await saveQueue(next)
   },
 
   removeFromQueue: async (episodeId) => {
-    const previous = get().queue
-    const next = previous.filter((id) => id !== episodeId)
+    const next = get().queue.filter((id) => id !== episodeId)
     set({ queue: next })
-    try {
-      await saveQueue(next)
-    } catch (err) {
-      set((state) => ({ queue: state.queue === next ? previous : state.queue }))
-      throw err
-    }
+    await saveQueue(next)
+  },
+
+  removeManyFromQueue: async (episodeIds) => {
+    if (episodeIds.length === 0) return
+    const toRemove = new Set(episodeIds)
+    const next = get().queue.filter((id) => !toRemove.has(id))
+    set({ queue: next })
+    await saveQueue(next)
   },
 
   reorderQueue: async (episodeIds) => {
-    const previous = get().queue
     set({ queue: episodeIds })
-    try {
-      await saveQueue(episodeIds)
-    } catch (err) {
-      set((state) => ({ queue: state.queue === episodeIds ? previous : state.queue }))
-      throw err
-    }
+    await saveQueue(episodeIds)
   },
 
   loadDownloads: () => {
@@ -1519,44 +1498,48 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   loadStations: async () => {
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
     const userId = await currentUserId()
     if (!userId) return
     try {
-      const rows = await fetchAllRows<StationRow>((from, to) =>
-        supabase
-          .from('stations')
-          .select('*', { count: 'exact' })
-          .eq('user_id', userId)
-          .is('deleted_at', null)
-          .range(from, to)
-      )
-      const validSorts = new Set(['newest', 'oldest', 'shortest', 'longest'])
-      const stations: Station[] = rows.map((row) => ({
-        id: row.id,
-        name: row.name,
-        podcastIds: Array.isArray(row.podcast_ids) ? row.podcast_ids : [],
-        sortBy: validSorts.has(row.sort_by) ? (row.sort_by as Station['sortBy']) : 'newest',
-        episodesPerShow: typeof row.episodes_per_show === 'number' ? row.episodes_per_show : 5
-      }))
-      set({ stations, stationsLoaded: true })
+      const client = syncClient()
+      const stationsById = new Map(get().stations.map((s) => [s.id, s]))
+      const descriptors = createTableDescriptors({
+        onStationRow: (row) => {
+          stationsById.set(row.id, {
+            id: row.id,
+            name: row.name ?? 'Untitled Station',
+            podcastIds: Array.isArray(row.podcast_ids) ? row.podcast_ids : [],
+            sortBy: (['newest', 'oldest', 'shortest', 'longest'] as const).includes(row.sort_by as never)
+              ? (row.sort_by as Station['sortBy'])
+              : 'newest',
+            episodesPerShow: typeof row.episodes_per_show === 'number' ? row.episodes_per_show : 5
+          })
+        },
+        onStationTombstone: (row) => {
+          stationsById.delete(row.id)
+        }
+      })
+      await enginePullAndMerge(client, ledger, userId, descriptors, markerFromUpdatedAt)
+      set({ stations: Array.from(stationsById.values()), stationsLoaded: true })
     } catch (err) {
       console.error('[stations] load failed:', err)
       set({ stationsLoaded: true })
     }
   },
 
+  // upsertStation routes through the shared outbox (never rejects — see its
+  // doc comment), so every category action below is optimistic-and-durable
+  // rather than throw-and-roll-back: the local state IS what eventually
+  // reaches the server, no matter how long a flaky connection takes.
   createCategory: async (name) => {
     const userId = await currentUserId()
     if (!userId) throw new Error('Not signed in')
     const id = await hashId(`${name}-${Date.now()}-${Math.random()}`)
     const station: Station = { id, name, podcastIds: [], sortBy: 'newest', episodesPerShow: 5 }
-    try {
-      await upsertStation(userId, station)
-    } catch (err) {
-      console.error(`[categories] create failed for "${name}":`, err)
-      throw err
-    }
     set((state) => ({ stations: [...state.stations, station] }))
+    await upsertStation(userId, station)
     return station
   },
 
@@ -1566,30 +1549,22 @@ export const useStore = create<AppState>((set, get) => ({
     const station = get().stations.find((s) => s.id === stationId)
     if (!station) return
     const updated: Station = { ...station, name }
-    try {
-      await upsertStation(userId, updated)
-    } catch (err) {
-      console.error(`[categories] rename failed for ${stationId}:`, err)
-      throw err
-    }
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
+    await upsertStation(userId, updated)
   },
 
   deleteCategory: async (stationId) => {
     const userId = await currentUserId()
     if (!userId) return
-    const previous = get().stations
     set((state) => ({ stations: state.stations.filter((s) => s.id !== stationId) }))
-    const now = new Date().toISOString()
-    try {
-      unwrap(
-        await supabase.from('stations').upsert({ user_id: userId, id: stationId, deleted_at: now, updated_at: now })
-      )
-    } catch (err) {
-      console.error(`[categories] delete failed for ${stationId}:`, err)
-      set({ stations: previous })
-      throw err
-    }
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
+    ledger.touch(`station:${stationId}`)
+    await getOutbox().enqueue('stations', `station:${stationId}`, {
+      user_id: userId,
+      id: stationId,
+      deleted_at: new Date().toISOString()
+    })
   },
 
   addPodcastToCategory: async (stationId, podcastId) => {
@@ -1599,12 +1574,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (!station || station.podcastIds.includes(podcastId)) return
     const updated: Station = { ...station, podcastIds: [...station.podcastIds, podcastId] }
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
-    try {
-      await upsertStation(userId, updated)
-    } catch (err) {
-      console.error(`[categories] add podcast failed for ${stationId}:`, err)
-      throw err
-    }
+    await upsertStation(userId, updated)
   },
 
   removePodcastFromCategory: async (stationId, podcastId) => {
@@ -1614,12 +1584,7 @@ export const useStore = create<AppState>((set, get) => ({
     if (!station) return
     const updated: Station = { ...station, podcastIds: station.podcastIds.filter((id) => id !== podcastId) }
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
-    try {
-      await upsertStation(userId, updated)
-    } catch (err) {
-      console.error(`[categories] remove podcast failed for ${stationId}:`, err)
-      throw err
-    }
+    await upsertStation(userId, updated)
   },
 
   loadEpisode: (episodeId, opts) => {
@@ -1649,7 +1614,8 @@ export const useStore = create<AppState>((set, get) => ({
     const previousId = previousInQueue(queue, currentEpisodeId)
     if (previousId) loadEpisode(previousId, { autoplay: true })
   }
-}))
+  }
+})
 
 // Coming back to the foreground is exactly the moment listening may have
 // happened elsewhere (put the phone down, picked up the iPad) — re-pull

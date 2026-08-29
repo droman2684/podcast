@@ -1,5 +1,6 @@
 import { IPC_CHANNELS } from '@shared/ipcChannels'
 import type { AuthState } from '@shared/ipcChannels'
+import { looksLikeAuthError } from '@shared/sync/authRetry'
 import { getSupabase } from './client'
 import { getMainWindow } from '../windowRegistry'
 
@@ -16,6 +17,27 @@ export async function getAuthState(): Promise<AuthState> {
 
 export async function hasSession(): Promise<boolean> {
   return (await getAuthState()).signedIn
+}
+
+// Proactively refreshes a cached-from-disk session before trusting it for
+// the first pull of a launch, rather than finding out it's stale only when
+// a data call fails. If the refresh itself comes back auth-shaped-broken
+// (e.g. a refresh token minted while this machine's clock was wrong, which
+// keeps failing until real time catches up no matter how many times it's
+// retried), the session is unrecoverable on its own — sign out locally so
+// the user gets a clear re-login prompt instead of a permanently-broken
+// cached session that fails every sync forever.
+export async function ensureFreshSession(): Promise<void> {
+  const supabase = getSupabase()
+  if (!supabase) return
+  const { data } = await supabase.auth.getSession()
+  if (!data.session) return
+  const { error } = await supabase.auth.refreshSession()
+  if (error && looksLikeAuthError(error)) {
+    console.error('[auth] session unrecoverable on launch, signing out locally:', error.message)
+    await supabase.auth.signOut({ scope: 'local' })
+    emitAuthState({ signedIn: false, email: null })
+  }
 }
 
 // Email/password rather than a magic link or OTP code — those require
