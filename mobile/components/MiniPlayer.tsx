@@ -39,7 +39,11 @@ export default function MiniPlayer({ onOpen }: Props): React.JSX.Element | null 
         <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
       </View>
       <View style={styles.row}>
-        <Artwork url={episode.artworkUrl ?? podcast.artworkUrl} size={36} radius={radii.artworkSm} />
+        <Artwork
+          url={podcast.customArtworkUrl ?? episode.artworkUrl ?? podcast.artworkUrl}
+          size={36}
+          radius={radii.artworkSm}
+        />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={styles.title} numberOfLines={1}>
             {episode.title}

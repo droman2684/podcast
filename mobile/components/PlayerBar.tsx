@@ -90,7 +90,11 @@ export default function PlayerBar({ onOpen }: Props): React.JSX.Element | null {
 
       <View style={styles.controlsRow}>
         <Pressable style={styles.identity} onPress={() => onOpen(podcast.id, episode.id)}>
-          <Artwork url={episode.artworkUrl ?? podcast.artworkUrl} size={48} radius={radii.artworkSm} />
+          <Artwork
+            url={podcast.customArtworkUrl ?? episode.artworkUrl ?? podcast.artworkUrl}
+            size={48}
+            radius={radii.artworkSm}
+          />
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={styles.title} numberOfLines={1}>
               {episode.title}

@@ -46,7 +46,11 @@ function EpisodeRow({
   return (
     <View style={styles.card}>
       <Pressable style={styles.row} onPress={onPlay}>
-        <Artwork url={episode.artworkUrl ?? podcast.artworkUrl} size={44} radius={radii.artworkSm} />
+        <Artwork
+          url={podcast.customArtworkUrl ?? episode.artworkUrl ?? podcast.artworkUrl}
+          size={44}
+          radius={radii.artworkSm}
+        />
         <View style={{ flex: 1 }}>
           <Text style={styles.epTitle} numberOfLines={2}>
             {episode.title}

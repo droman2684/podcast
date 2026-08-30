@@ -1,8 +1,10 @@
 import { useState } from 'react'
-import { View, Text, Pressable, Switch, Alert, StyleSheet } from 'react-native'
+import { View, Text, Pressable, Switch, Alert, StyleSheet, ActivityIndicator } from 'react-native'
+import { Camera } from 'lucide-react-native'
 import type { Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
+import { pickPodcastArtwork } from '../lib/podcastArtwork'
 import { colors, radii, cardShadow } from '../theme'
 
 interface Props {
@@ -16,8 +18,10 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
   const setNotify = useStore((s) => s.setNotify)
   const unsubscribe = useStore((s) => s.unsubscribe)
   const markAllPlayed = useStore((s) => s.markAllPlayed)
+  const setPodcastArtwork = useStore((s) => s.setPodcastArtwork)
   const [unsubscribing, setUnsubscribing] = useState(false)
   const [markingPlayed, setMarkingPlayed] = useState(false)
+  const [uploadingArt, setUploadingArt] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const handleUnsubscribe = async (): Promise<void> => {
@@ -66,13 +70,52 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
     }
   }
 
+  const handleChangeArtwork = async (): Promise<void> => {
+    if (uploadingArt) return
+    setUploadingArt(true)
+    setError(null)
+    try {
+      const dataUrl = await pickPodcastArtwork()
+      if (dataUrl) await setPodcastArtwork(podcast.id, dataUrl)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setUploadingArt(false)
+    }
+  }
+
+  const handleRemoveArtwork = async (): Promise<void> => {
+    setError(null)
+    try {
+      await setPodcastArtwork(podcast.id, null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   return (
     <View style={styles.container}>
       <Pressable onPress={onBack}>
         <Text style={styles.back}>{'‹ Back'}</Text>
       </Pressable>
       <View style={styles.header}>
-        <Artwork url={podcast.customArtworkUrl ?? podcast.artworkUrl} size={56} radius={10} />
+        <Pressable
+          onPress={handleChangeArtwork}
+          disabled={uploadingArt}
+          accessibilityLabel="Change show artwork"
+          style={{ position: 'relative' }}
+        >
+          <Artwork url={podcast.customArtworkUrl ?? podcast.artworkUrl} size={56} radius={10} />
+          {uploadingArt ? (
+            <View style={[styles.artworkOverlay, { borderRadius: 10 }]}>
+              <ActivityIndicator color="#fff" size="small" />
+            </View>
+          ) : (
+            <View style={styles.artworkBadge}>
+              <Camera size={12} color="#fff" />
+            </View>
+          )}
+        </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={styles.name}>{podcast.name}</Text>
           <Text style={styles.author}>{podcast.author}</Text>
@@ -104,6 +147,15 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
             {markingPlayed ? 'Marking…' : 'Mark all episodes as played'}
           </Text>
         </Pressable>
+        {podcast.customArtworkUrl && (
+          <Pressable
+            style={styles.actionRow}
+            onPress={handleRemoveArtwork}
+            accessibilityLabel="Remove custom artwork"
+          >
+            <Text style={styles.actionText}>Remove custom artwork</Text>
+          </Pressable>
+        )}
       </View>
 
       <Pressable
@@ -123,6 +175,25 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60, paddingHorizontal: 20 },
   back: { color: colors.accent, marginBottom: 20, fontSize: 15 },
   header: { flexDirection: 'row', alignItems: 'center', gap: 14, marginBottom: 24 },
+  artworkBadge: {
+    position: 'absolute',
+    right: -4,
+    bottom: -4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.textSecondary,
+    borderWidth: 2,
+    borderColor: colors.bg,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  artworkOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
   name: { fontSize: 17, fontWeight: '700', color: colors.textPrimary },
   author: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
   error: { color: colors.danger, fontSize: 12, marginBottom: 16 },

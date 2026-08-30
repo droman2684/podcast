@@ -258,6 +258,7 @@ interface AppState {
   subscribe: (podcast: DiscoverPodcast) => Promise<void>
   unsubscribe: (podcastId: string) => Promise<void>
   setNotify: (podcastId: string, notify: boolean) => Promise<void>
+  setPodcastArtwork: (podcastId: string, dataUrl: string | null) => Promise<void>
 
   // Live cross-device sync for the three tables that were previously
   // poll-only (loadLibrary on open, refreshPositions on foreground) — a
@@ -1138,6 +1139,28 @@ export const useStore = create<AppState>((set, get) => {
       user_id: userId,
       podcast_id: podcastId,
       notify
+    })
+  },
+
+  // Mirrors desktop's setPodcastArtwork (src/main/subscriptions.ts): dataUrl
+  // is null to clear the override and revert to the feed's own artwork. The
+  // caller is expected to have already resized/compressed the image (see
+  // lib/imageResize.ts) before it ever reaches here or the outbox.
+  setPodcastArtwork: async (podcastId, dataUrl) => {
+    set((state) => ({
+      podcasts: state.podcasts.map((p) =>
+        p.id === podcastId ? { ...p, customArtworkUrl: dataUrl } : p
+      )
+    }))
+    const userId = await currentUserId()
+    if (!userId) return
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
+    ledger.touch(`podcast:${podcastId}`)
+    await getOutbox().enqueue('podcasts', `podcast:${podcastId}`, {
+      user_id: userId,
+      id: podcastId,
+      custom_artwork_url: dataUrl
     })
   },
 

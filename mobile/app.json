@@ -9,7 +9,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.empirepod.app",
-      "buildNumber": "30",
+      "buildNumber": "31",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "UISupportedInterfaceOrientations": [
@@ -50,7 +50,13 @@
       ],
       "expo-asset",
       "./plugins/withRemoteControlEvents.js",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Empire Pod uses your photo library to let you set custom show artwork."
+        }
+      ]
     ],
     "extra": {
       "eas": {

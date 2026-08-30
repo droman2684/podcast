@@ -222,7 +222,7 @@ export default function QueueScreen({
           }
         >
           <Artwork
-            url={item.episode.artworkUrl ?? item.podcast.artworkUrl}
+            url={item.podcast.customArtworkUrl ?? item.episode.artworkUrl ?? item.podcast.artworkUrl}
             size={44}
             radius={radii.artworkSm}
           />
@@ -337,7 +337,11 @@ export default function QueueScreen({
   const renderDetailContent = (item: QueueItem, showClose: boolean): React.JSX.Element => (
     <>
       <View style={styles.modalHeader}>
-        <Artwork url={item.episode.artworkUrl ?? item.podcast.artworkUrl} size={48} radius={radii.artworkSm} />
+        <Artwork
+          url={item.podcast.customArtworkUrl ?? item.episode.artworkUrl ?? item.podcast.artworkUrl}
+          size={48}
+          radius={radii.artworkSm}
+        />
         <View style={{ flex: 1 }}>
           <Text style={styles.epTitle} numberOfLines={2}>
             {item.episode.title}

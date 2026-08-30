@@ -172,7 +172,11 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
             contentContainerStyle={styles.tabletLeftContent}
             showsVerticalScrollIndicator={false}
           >
-            <Artwork url={episode.artworkUrl ?? podcast.artworkUrl} size={288} radius={radii.card} />
+            <Artwork
+              url={podcast.customArtworkUrl ?? episode.artworkUrl ?? podcast.artworkUrl}
+              size={288}
+              radius={radii.card}
+            />
             <Text style={styles.podcastNameTablet}>{podcast.name}</Text>
             <Text style={styles.titleTablet} numberOfLines={3}>
               {episode.title}
@@ -201,7 +205,7 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
                         onPress={() => loadEpisode(item.id, { autoplay: true })}
                       >
                         <Artwork
-                          url={item.artworkUrl ?? itemPodcast?.artworkUrl ?? null}
+                          url={itemPodcast?.customArtworkUrl ?? item.artworkUrl ?? itemPodcast?.artworkUrl ?? null}
                           size={40}
                           radius={radii.artworkSm}
                         />
@@ -238,7 +242,11 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
       </Pressable>
 
       <View style={styles.artworkWrap}>
-        <Artwork url={episode.artworkUrl ?? podcast.artworkUrl} size={220} radius={16} />
+        <Artwork
+          url={podcast.customArtworkUrl ?? episode.artworkUrl ?? podcast.artworkUrl}
+          size={220}
+          radius={16}
+        />
       </View>
 
       <Text style={styles.podcastName}>{podcast.name}</Text>
