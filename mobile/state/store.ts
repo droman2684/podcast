@@ -133,6 +133,35 @@ async function saveLocalPositions(positions: Record<string, number>): Promise<vo
   }
 }
 
+// Local durable cache of custom artwork overrides, mirroring the queue/
+// positions caches above — setPodcastArtwork's Supabase write can lose a
+// race with the app closing (or just not have drained from the outbox yet),
+// and loadLibrary's ledger gate then correctly rejects the stale pulled row
+// but falls back to the in-memory `podcasts` array, which on a cold start is
+// always the freshly-initialized `[]`. Without this cache that meant a
+// custom icon set right before backgrounding/closing the app quietly reverted
+// to the feed's own artwork on next launch even though the edit was never
+// lost server-side — it just hadn't round-tripped back down yet.
+const ARTWORK_STORAGE_KEY = 'empirepod.customArtwork.v1'
+
+async function loadLocalArtwork(): Promise<Record<string, string | null>> {
+  try {
+    const raw = await AsyncStorage.getItem(ARTWORK_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, string | null>) : {}
+  } catch (err) {
+    console.error('[artwork] local load failed:', err)
+    return {}
+  }
+}
+
+async function saveLocalArtwork(overrides: Record<string, string | null>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(ARTWORK_STORAGE_KEY, JSON.stringify(overrides))
+  } catch (err) {
+    console.error('[artwork] local save failed:', err)
+  }
+}
+
 async function loadLastSeenMap(): Promise<Record<string, string>> {
   try {
     const raw = await AsyncStorage.getItem(LAST_SEEN_STORAGE_KEY)
@@ -229,6 +258,11 @@ interface AppState {
   isOffline: boolean
 
   podcasts: Podcast[]
+  // Local durable cache of setPodcastArtwork edits, keyed by podcast id — see
+  // ARTWORK_STORAGE_KEY's doc comment. Consulted only as loadLibrary's
+  // fallback when a pull is rejected by the ledger; `podcasts[].customArtworkUrl`
+  // stays the source of truth for rendering.
+  customArtworkOverrides: Record<string, string | null>
   episodesByPodcast: Record<string, Episode[]>
   positions: Record<string, number>
   podcastSettings: Record<string, PodcastSettings>
@@ -285,6 +319,9 @@ interface AppState {
   // start falls back to the last real queue instead of the empty initial
   // state. See QUEUE_STORAGE_KEY's doc comment.
   loadCachedQueue: () => Promise<void>
+  // Same idea, for custom artwork overrides — see ARTWORK_STORAGE_KEY's doc
+  // comment.
+  loadCachedArtwork: () => Promise<void>
   savePosition: (episodeId: string, positionSec: number) => Promise<void>
   // Fetches the authoritative position for one episode straight from
   // Supabase rather than trusting the local `positions` cache, which can be
@@ -488,6 +525,7 @@ export const useStore = create<AppState>((set, get) => {
   isOffline: false,
 
   podcasts: [],
+  customArtworkOverrides: {},
   episodesByPodcast: {},
   positions: {},
   podcastSettings: {},
@@ -519,6 +557,11 @@ export const useStore = create<AppState>((set, get) => {
   loadCachedQueue: async () => {
     const cached = await loadLocalQueue()
     set({ queue: cached })
+  },
+
+  loadCachedArtwork: async () => {
+    const cached = await loadLocalArtwork()
+    set({ customArtworkOverrides: cached })
   },
 
   loadSettings: async () => {
@@ -776,12 +819,21 @@ export const useStore = create<AppState>((set, get) => {
       // the grid doesn't reshuffle as results race in out of order.
       const mergeFeed = (result: { podcast: Podcast; episodes: Episode[] } | null): void => {
         if (!result) return
-        set((state) => ({
-          podcasts: [...state.podcasts.filter((p) => p.id !== result.podcast.id), result.podcast].sort(
-            (a, b) => (rowOrder.get(a.id) ?? 0) - (rowOrder.get(b.id) ?? 0)
-          ),
-          episodesByPodcast: { ...state.episodesByPodcast, [result.podcast.id]: result.episodes }
-        }))
+        set((state) => {
+          // Keeps the durable artwork cache aligned with whatever actually
+          // lands in `podcasts` (a freshly-accepted server value, or the
+          // fallback computed above) so a stale local override doesn't
+          // linger forever once the real state is known.
+          const overrides = { ...state.customArtworkOverrides, [result.podcast.id]: result.podcast.customArtworkUrl }
+          saveLocalArtwork(overrides).catch(() => {})
+          return {
+            podcasts: [...state.podcasts.filter((p) => p.id !== result.podcast.id), result.podcast].sort(
+              (a, b) => (rowOrder.get(a.id) ?? 0) - (rowOrder.get(b.id) ?? 0)
+            ),
+            episodesByPodcast: { ...state.episodesByPodcast, [result.podcast.id]: result.episodes },
+            customArtworkOverrides: overrides
+          }
+        })
       }
 
       // A podcast with no entry yet in `lastSeen` is being loaded on this
@@ -812,9 +864,15 @@ export const useStore = create<AppState>((set, get) => {
           const marker = markerFromUpdatedAt(row)
           const acceptIdentity = ledger.isNewer(key, marker)
           if (acceptIdentity) ledger.touch(key, marker)
+          // On a cold start `state.podcasts` is always `[]`, so it can't be
+          // trusted as "what this device already knows" the way it can be
+          // mid-session — fall back further to the durable local cache (see
+          // ARTWORK_STORAGE_KEY) before giving up and using null.
           const customArtworkUrl = acceptIdentity
             ? row.custom_artwork_url
-            : (get().podcasts.find((p) => p.id === row.id)?.customArtworkUrl ?? null)
+            : (get().podcasts.find((p) => p.id === row.id)?.customArtworkUrl ??
+              get().customArtworkOverrides[row.id] ??
+              null)
 
           // A private feed with no locally-saved credential (synced from
           // another device, never unlocked on this one) can't be fetched —
@@ -1147,11 +1205,14 @@ export const useStore = create<AppState>((set, get) => {
   // caller is expected to have already resized/compressed the image (see
   // lib/imageResize.ts) before it ever reaches here or the outbox.
   setPodcastArtwork: async (podcastId, dataUrl) => {
+    const overrides = { ...get().customArtworkOverrides, [podcastId]: dataUrl }
     set((state) => ({
       podcasts: state.podcasts.map((p) =>
         p.id === podcastId ? { ...p, customArtworkUrl: dataUrl } : p
-      )
+      ),
+      customArtworkOverrides: overrides
     }))
+    saveLocalArtwork(overrides).catch(() => {})
     const userId = await currentUserId()
     if (!userId) return
     const ledger = getLedger()

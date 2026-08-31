@@ -4,7 +4,7 @@ import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, type AudioSour
 import { useStore } from '../state/store'
 import { removeFromQueueOnFinish } from '../lib/queueHelpers'
 import { buildEpisodeIndex } from '../lib/episodeIndex'
-import { getPrivateFeedCredential, basicAuthHeader } from '../lib/privateFeedCredentials'
+import { getPrivateFeedCredential, basicAuthHeader, resolvePrivateStreamUrl } from '../lib/privateFeedCredentials'
 
 const SAVE_INTERVAL_MS = 3000
 
@@ -98,12 +98,17 @@ export default function AudioEngine(): null {
       player.replace(episode.audioUrl)
       return
     }
-    getPrivateFeedCredential(podcast.id).then((credential) => {
+    getPrivateFeedCredential(podcast.id).then(async (credential) => {
       // Bail if a different episode loaded while this lookup was in flight.
       if (loadedEpisodeId.current !== episode.id) return
-      const source: AudioSource = credential
-        ? { uri: episode.audioUrl, headers: { Authorization: basicAuthHeader(credential.user, credential.password) } }
-        : episode.audioUrl
+      if (!credential) {
+        player.replace(episode.audioUrl)
+        return
+      }
+      const authHeader = basicAuthHeader(credential.user, credential.password)
+      const resolvedUrl = await resolvePrivateStreamUrl(episode.audioUrl, authHeader)
+      if (loadedEpisodeId.current !== episode.id) return
+      const source: AudioSource = { uri: resolvedUrl, headers: { Authorization: authHeader } }
       player.replace(source)
     })
   }, [episode?.id, episode?.audioUrl, downloadedUris, podcast?.isPrivate, podcast?.id, player])

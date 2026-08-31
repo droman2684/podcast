@@ -69,6 +69,7 @@ export default function QueueScreen({
   const currentEpisodeId = useStore((s) => s.currentEpisodeId)
   const playing = useStore((s) => s.playing)
   const currentTimeSec = useStore((s) => s.currentTimeSec)
+  const liveDuration = useStore((s) => s.duration)
   const libraryLoading = useStore((s) => s.libraryLoading)
   const libraryLoaded = useStore((s) => s.libraryLoaded)
   const positions = useStore((s) => s.positions)
@@ -177,7 +178,12 @@ export default function QueueScreen({
     // means the bar actually moves while an episode plays instead of
     // jumping every 5 seconds.
     const positionSec = isCurrent ? currentTimeSec : (positions[item.episode.id] ?? 0)
-    const progress = item.episode.durationSec > 0 ? Math.min(1, positionSec / item.episode.durationSec) : 0
+    // Falls back to the live player's duration for the currently-loaded
+    // episode when the RSS feed didn't carry an itunes:duration tag (seen on
+    // some private feeds) — otherwise "remaining" stays blank forever even
+    // though the actual duration is known once playback starts.
+    const durationSec = item.episode.durationSec > 0 ? item.episode.durationSec : isCurrent ? liveDuration : 0
+    const progress = durationSec > 0 ? Math.min(1, positionSec / durationSec) : 0
     const selected = isTablet && detailItem?.episode.id === item.episode.id
     const checked = selectedIds.has(item.episode.id)
     return (
@@ -235,7 +241,7 @@ export default function QueueScreen({
                 {item.podcast.name}
               </Text>
               {positionSec > 0 && (
-                <Text style={styles.remaining}> · {formatRemaining(item.episode.durationSec, positionSec)}</Text>
+                <Text style={styles.remaining}> · {formatRemaining(durationSec, positionSec)}</Text>
               )}
             </View>
             {positionSec > 0 && (

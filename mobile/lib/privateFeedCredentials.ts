@@ -60,3 +60,33 @@ function base64Encode(input: string): string {
 export function basicAuthHeader(user: string, password: string): string {
   return `Basic ${base64Encode(`${user}:${password}`)}`
 }
+
+// Many private-feed hosts serve the enclosure URL as a redirect (302) to a
+// separately-signed CDN URL — but iOS/Android's native audio players don't
+// forward a custom Authorization header across a cross-origin redirect (a
+// standard fetch/URLSession security behavior, not something this app
+// controls). Handing the *original* gated URL + header straight to the
+// player works for the request that actually carries the header, but any
+// later request the player makes past that point — including the redirect
+// itself in some native implementations, and definitely any request needed
+// once playback catches up to what was already buffered — goes out with no
+// auth and gets rejected, which reads as playback stalling/restarting a
+// few minutes in. Resolving the redirect ourselves first (one authenticated
+// request, letting fetch follow it) means the player is handed the final
+// URL directly instead of relying on the native layer to carry auth through
+// a hop it wasn't going to. Falls back to the original URL on any failure
+// (offline, no redirect, host doesn't support Range) — playback then behaves
+// exactly as it did before this existed.
+export async function resolvePrivateStreamUrl(url: string, authHeader: string): Promise<string> {
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Authorization: authHeader, Range: 'bytes=0-1' }
+    })
+    await res.text().catch(() => {})
+    return res.url && res.url !== url ? res.url : url
+  } catch (err) {
+    console.error('[privateFeed] stream URL resolution failed, using original URL:', err)
+    return url
+  }
+}

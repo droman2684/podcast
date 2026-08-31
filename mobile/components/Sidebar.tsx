@@ -23,6 +23,7 @@ const ITEMS: { key: Tab; label: string; Icon: typeof Library }[] = [
 const RECENT_LIMIT = 4
 
 function formatRemaining(durationSec: number, positionSec: number): string {
+  if (!durationSec) return ''
   const left = Math.max(0, Math.round((durationSec - positionSec) / 60))
   return left > 0 ? `${left}m left` : 'Almost done'
 }
@@ -50,6 +51,7 @@ export default function Sidebar({
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const positions = useStore((s) => s.positions)
+  const liveDuration = useStore((s) => s.duration)
   const queue = useStore((s) => s.queue)
   const userEmail = useStore((s) => s.userEmail)
 
@@ -156,7 +158,18 @@ export default function Sidebar({
                       {podcast.name}
                     </Text>
                     <Text style={styles.recentMeta} numberOfLines={1}>
-                      {formatRemaining(episode.durationSec, positions[episode.id] ?? 0)}
+                      {formatRemaining(
+                        // Falls back to the live player's duration when the
+                        // feed's RSS didn't carry an itunes:duration tag
+                        // (seen on some private feeds) — see QueueScreen's
+                        // matching fallback.
+                        episode.durationSec > 0
+                          ? episode.durationSec
+                          : episode.id === currentEpisodeId
+                            ? liveDuration
+                            : 0,
+                        positions[episode.id] ?? 0
+                      )}
                     </Text>
                   </View>
                 </Pressable>
