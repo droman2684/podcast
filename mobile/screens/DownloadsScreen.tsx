@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
 import { Play, Pause, Trash2, Settings, HardDriveDownload } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
@@ -10,6 +10,37 @@ import { colors, radii, cardShadow } from '../theme'
 interface DownloadItem {
   podcast: Podcast
   episode: Episode
+}
+
+type SortBy = 'newest' | 'oldest' | 'title' | 'show'
+
+const SORT_OPTIONS: { key: SortBy; label: string }[] = [
+  { key: 'newest', label: 'Newest' },
+  { key: 'oldest', label: 'Oldest' },
+  { key: 'title', label: 'Title' },
+  { key: 'show', label: 'Show' }
+]
+
+function sortItems(items: DownloadItem[], sortBy: SortBy): DownloadItem[] {
+  const sorted = [...items]
+  switch (sortBy) {
+    case 'oldest':
+      sorted.sort((a, b) => (a.episode.pubDateIso < b.episode.pubDateIso ? -1 : 1))
+      break
+    case 'title':
+      sorted.sort((a, b) => a.episode.title.localeCompare(b.episode.title))
+      break
+    case 'show':
+      sorted.sort(
+        (a, b) =>
+          a.podcast.name.localeCompare(b.podcast.name) ||
+          (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1)
+      )
+      break
+    default:
+      sorted.sort((a, b) => (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1))
+  }
+  return sorted
 }
 
 interface Props {
@@ -39,22 +70,22 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
   const togglePlay = useStore((s) => s.togglePlay)
   const removeDownload = useStore((s) => s.removeDownload)
 
+  const [sortBy, setSortBy] = useState<SortBy>('newest')
+
   // Downloaded episodes can outlive the podcast they came from being
   // rendered anywhere else (still on disk even if, say, a private feed's
   // credential goes missing) — matched up against episodesByPodcast/podcasts
   // here rather than trusted blindly, and silently skipped if either lookup
   // comes up empty rather than showing a broken row.
   const items = useMemo(() => {
-    const podcastById = new Map(podcasts.map((p) => [p.id, p]))
     const out: DownloadItem[] = []
     for (const podcast of podcasts) {
       for (const episode of episodesByPodcast[podcast.id] ?? []) {
         if (downloadedUris[episode.id]) out.push({ podcast, episode })
       }
     }
-    out.sort((a, b) => (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1))
-    return out.filter((item) => podcastById.has(item.podcast.id))
-  }, [downloadedUris, podcasts, episodesByPodcast])
+    return sortItems(out, sortBy)
+  }, [downloadedUris, podcasts, episodesByPodcast, sortBy])
 
   const handlePlayToggle = (podcastId: string, episodeId: string): void => {
     const willPlay = !(currentEpisodeId === episodeId && playing)
@@ -71,6 +102,20 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
           <Settings size={20} color={colors.textMuted} />
         </Pressable>
       </View>
+
+      {items.length > 0 && (
+        <View style={styles.sortRow}>
+          {SORT_OPTIONS.map(({ key, label }) => (
+            <Pressable
+              key={key}
+              style={[styles.sortBtn, sortBy === key && styles.sortBtnActive]}
+              onPress={() => setSortBy(key)}
+            >
+              <Text style={[styles.sortBtnText, sortBy === key && styles.sortBtnTextActive]}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      )}
 
       {items.length === 0 ? (
         <View style={styles.emptyState}>
@@ -162,6 +207,16 @@ const styles = StyleSheet.create({
     marginBottom: 16
   },
   title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary },
+  sortRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 20, marginBottom: 16 },
+  sortBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    backgroundColor: '#e8e8ed'
+  },
+  sortBtnActive: { backgroundColor: colors.accent },
+  sortBtnText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+  sortBtnTextActive: { color: '#fff' },
   listContent: { paddingHorizontal: 20, paddingBottom: 20 },
   row: {
     flexDirection: 'row',

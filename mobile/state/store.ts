@@ -349,10 +349,20 @@ interface AppState {
   // Downloaded audio, keyed by episode id -> local file uri. Device-local
   // only (see downloads.ts) — never synced. `downloadingIds` tracks in-flight
   // downloads so a row can show a spinner instead of the download button.
+  // `downloadProgress` is that same in-flight download's fraction complete
+  // (0-1), absent (rather than 0) once the id is no longer downloading so a
+  // stale last-known value can't be mistaken for a fresh one on the next
+  // download of the same episode.
   downloadedUris: Record<string, string>
   downloadingIds: Record<string, boolean>
+  downloadProgress: Record<string, number>
   loadDownloads: () => void
   downloadEpisode: (episode: Episode) => Promise<void>
+  // Also drops the episode from the queue if it's in one — downloaded
+  // specifically to listen offline, so once the file backing that is gone
+  // there's no reason for it to still be queued up. Mirrors AudioEngine's
+  // own removeFromQueueOnFinish for the "finished playing" case; this is the
+  // "deleted the download" case.
   removeDownload: (episodeId: string) => void
 
   // "Categories" in the mobile UI — backed by the same `stations` table
@@ -536,6 +546,7 @@ export const useStore = create<AppState>((set, get) => {
 
   downloadedUris: {},
   downloadingIds: {},
+  downloadProgress: {},
 
   stations: [],
   stationsLoaded: false,
@@ -1559,14 +1570,17 @@ export const useStore = create<AppState>((set, get) => {
         const credential = await getPrivateFeedCredential(episode.podcastId)
         if (credential) authHeader = basicAuthHeader(credential.user, credential.password)
       }
-      const uri = await downloadEpisodeFile(episode.id, episode.audioUrl, authHeader)
+      const uri = await downloadEpisodeFile(episode.id, episode.audioUrl, authHeader, (fraction) => {
+        set((state) => ({ downloadProgress: { ...state.downloadProgress, [episode.id]: fraction } }))
+      })
       set((state) => ({ downloadedUris: { ...state.downloadedUris, [episode.id]: uri } }))
     } catch (err) {
       console.error(`[downloads] failed for ${episode.id}:`, err)
     } finally {
       set((state) => {
-        const { [episode.id]: _removed, ...rest } = state.downloadingIds
-        return { downloadingIds: rest }
+        const { [episode.id]: _removedDownloading, ...restDownloading } = state.downloadingIds
+        const { [episode.id]: _removedProgress, ...restProgress } = state.downloadProgress
+        return { downloadingIds: restDownloading, downloadProgress: restProgress }
       })
     }
   },
@@ -1579,6 +1593,7 @@ export const useStore = create<AppState>((set, get) => {
       const { [episodeId]: _removed, ...rest } = state.downloadedUris
       return { downloadedUris: rest }
     })
+    if (get().queue.includes(episodeId)) get().removeFromQueue(episodeId)
   },
 
   loadStations: async () => {

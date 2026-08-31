@@ -1,4 +1,9 @@
 import { Directory, File, Paths } from 'expo-file-system'
+// The new File/Directory API (above) has no download-progress callback at
+// all, so the actual download itself goes through the older, still-fully-
+// functional legacy module instead — everything else (paths, listing,
+// deletion) stays on the new API.
+import { createDownloadResumable } from 'expo-file-system/legacy'
 
 // Downloaded audio is device-local only, same as skip durations and default
 // library view — never synced through Supabase. Files live in their own
@@ -34,15 +39,32 @@ export function listDownloadedUris(): Record<string, string> {
   return map
 }
 
-export async function downloadEpisode(episodeId: string, audioUrl: string, authHeader?: string): Promise<string> {
+export async function downloadEpisode(
+  episodeId: string,
+  audioUrl: string,
+  authHeader?: string,
+  onProgress?: (fraction: number) => void
+): Promise<string> {
   const dir = downloadsDirectory()
   if (!dir.exists) dir.create({ intermediates: true, idempotent: true })
   const target = new File(dir, `${episodeId}${extensionFromUrl(audioUrl)}`)
-  const file = await File.downloadFileAsync(audioUrl, target, {
-    idempotent: true,
-    headers: authHeader ? { Authorization: authHeader } : undefined
-  })
-  return file.uri
+  const resumable = createDownloadResumable(
+    audioUrl,
+    target.uri,
+    { headers: authHeader ? { Authorization: authHeader } : undefined },
+    onProgress
+      ? ({ totalBytesWritten, totalBytesExpectedToWrite }) => {
+          // -1 means the server didn't send a Content-Length header, so
+          // there's nothing to divide by — leave the caller's indeterminate
+          // state (e.g. a spinner) alone rather than reporting a bogus
+          // fraction.
+          if (totalBytesExpectedToWrite > 0) onProgress(totalBytesWritten / totalBytesExpectedToWrite)
+        }
+      : undefined
+  )
+  const result = await resumable.downloadAsync()
+  if (!result) throw new Error(`Download did not complete for episode ${episodeId}`)
+  return result.uri
 }
 
 export function deleteDownload(uri: string): void {

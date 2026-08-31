@@ -19,6 +19,7 @@ import type { Episode, Podcast } from '@shared/types'
 import { groupByPodcast } from '@shared/queueView'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
+import DownloadProgressRing from '../components/DownloadProgressRing'
 import SwipeToDelete from '../components/SwipeToDelete'
 import SplitView from '../components/SplitView'
 import { stripHtml } from '../lib/stripHtml'
@@ -77,6 +78,7 @@ export default function QueueScreen({
   const togglePlay = useStore((s) => s.togglePlay)
   const downloadedUris = useStore((s) => s.downloadedUris)
   const downloadingIds = useStore((s) => s.downloadingIds)
+  const downloadProgress = useStore((s) => s.downloadProgress)
   const downloadEpisode = useStore((s) => s.downloadEpisode)
   const removeDownload = useStore((s) => s.removeDownload)
   const grouped = useStore((s) => s.queueGroupedByShow)
@@ -260,7 +262,7 @@ export default function QueueScreen({
               accessibilityLabel={downloaded ? 'Remove download' : 'Download episode'}
             >
               {downloading ? (
-                <ActivityIndicator size="small" color={colors.textMuted} />
+                <DownloadProgressRing progress={downloadProgress[item.episode.id] ?? 0} />
               ) : downloaded ? (
                 <Trash2 size={17} color={colors.accent} />
               ) : (

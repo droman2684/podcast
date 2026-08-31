@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
-import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from 'react-native'
+import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native'
 import { Settings, ChevronDown, ChevronUp, Download, Trash2, ListPlus, Check, RotateCcw } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
+import DownloadProgressRing from '../components/DownloadProgressRing'
 import { stripHtml } from '../lib/stripHtml'
 import { colors, radii, cardShadow } from '../theme'
 
@@ -22,6 +23,7 @@ interface RowProps {
   queued: boolean
   downloaded: boolean
   downloading: boolean
+  downloadProgress: number
   onPlay: () => void
   onToggleQueue: () => void
   onTogglePlayed: () => void
@@ -35,6 +37,7 @@ function EpisodeRow({
   queued,
   downloaded,
   downloading,
+  downloadProgress,
   onPlay,
   onToggleQueue,
   onTogglePlayed,
@@ -89,7 +92,7 @@ function EpisodeRow({
           accessibilityLabel={downloaded ? 'Remove download' : 'Download episode'}
         >
           {downloading ? (
-            <ActivityIndicator size="small" color={colors.textMuted} />
+            <DownloadProgressRing progress={downloadProgress} />
           ) : downloaded ? (
             <Trash2 size={17} color={colors.accent} />
           ) : (
@@ -140,6 +143,7 @@ export default function EpisodeListScreen({
   const setPlayed = useStore((s) => s.setPlayed)
   const downloadedUris = useStore((s) => s.downloadedUris)
   const downloadingIds = useStore((s) => s.downloadingIds)
+  const downloadProgress = useStore((s) => s.downloadProgress)
   const downloadEpisode = useStore((s) => s.downloadEpisode)
   const removeDownload = useStore((s) => s.removeDownload)
   const libraryLoading = useStore((s) => s.libraryLoading)
@@ -235,6 +239,7 @@ export default function EpisodeListScreen({
             queued={queue.includes(item.id)}
             downloaded={Boolean(downloadedUris[item.id])}
             downloading={Boolean(downloadingIds[item.id])}
+            downloadProgress={downloadProgress[item.id] ?? 0}
             onPlay={() => onPlay(item.id)}
             onToggleQueue={() => (queue.includes(item.id) ? removeFromQueue(item.id) : addToQueue(item.id))}
             onTogglePlayed={() => setPlayed(item.id, podcast.id, !item.played)}
