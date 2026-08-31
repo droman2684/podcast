@@ -10,6 +10,7 @@ import PlayerScreen from './screens/PlayerScreen'
 import PodcastSettingsScreen from './screens/PodcastSettingsScreen'
 import DiscoverScreen from './screens/DiscoverScreen'
 import QueueScreen from './screens/QueueScreen'
+import DownloadsScreen from './screens/DownloadsScreen'
 import SettingsScreen from './screens/SettingsScreen'
 import CategoriesScreen from './screens/CategoriesScreen'
 import CategoryDetailScreen from './screens/CategoryDetailScreen'
@@ -184,6 +185,14 @@ export default function App(): React.JSX.Element {
       )
     } else if (tab === 'discover') {
       screen = <DiscoverScreen onOpenAppSettings={goToAppSettings} onAddPrivateFeed={goToAddPrivateFeed} />
+    } else if (tab === 'downloads') {
+      screen = (
+        <DownloadsScreen
+          onPlay={openPlayer}
+          onBrowseLibrary={() => selectTab('library')}
+          onOpenAppSettings={goToAppSettings}
+        />
+      )
     } else {
       screen = (
         <QueueScreen

@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
-import { Library, Sparkles, ListOrdered } from 'lucide-react-native'
+import { Library, Sparkles, ListOrdered, HardDriveDownload } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from './Artwork'
@@ -17,6 +17,7 @@ export const RAIL_WIDTH = 88
 const ITEMS: { key: Tab; label: string; Icon: typeof Library }[] = [
   { key: 'queue', label: 'Queue', Icon: ListOrdered },
   { key: 'library', label: 'Library', Icon: Library },
+  { key: 'downloads', label: 'Downloads', Icon: HardDriveDownload },
   { key: 'discover', label: 'Discover', Icon: Sparkles }
 ]
 
@@ -53,13 +54,15 @@ export default function Sidebar({
   const positions = useStore((s) => s.positions)
   const liveDuration = useStore((s) => s.duration)
   const queue = useStore((s) => s.queue)
+  const downloadedUris = useStore((s) => s.downloadedUris)
   const userEmail = useStore((s) => s.userEmail)
 
   const isRail = mode === 'rail'
 
   const counts: Partial<Record<Tab, number>> = {
     library: podcasts.length,
-    queue: queue.length
+    queue: queue.length,
+    downloads: Object.keys(downloadedUris).length
   }
 
   // Episodes with a saved position that aren't finished, plus whatever's
