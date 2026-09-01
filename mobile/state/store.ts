@@ -115,6 +115,29 @@ async function saveLocalQueue(queue: string[]): Promise<void> {
   }
 }
 
+// Manual sort order for the Downloads screen. Downloads are device-local
+// only (see downloadedUris' doc comment), so unlike the queue this has no
+// server-synced counterpart — just this local cache.
+const DOWNLOAD_ORDER_STORAGE_KEY = 'empirepod.downloadOrder.v1'
+
+async function loadLocalDownloadOrder(): Promise<string[]> {
+  try {
+    const raw = await AsyncStorage.getItem(DOWNLOAD_ORDER_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as string[]) : []
+  } catch (err) {
+    console.error('[downloads] order load failed:', err)
+    return []
+  }
+}
+
+async function saveLocalDownloadOrder(order: string[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(DOWNLOAD_ORDER_STORAGE_KEY, JSON.stringify(order))
+  } catch (err) {
+    console.error('[downloads] order save failed:', err)
+  }
+}
+
 async function loadLocalPositions(): Promise<Record<string, number>> {
   try {
     const raw = await AsyncStorage.getItem(POSITIONS_STORAGE_KEY)
@@ -356,7 +379,12 @@ interface AppState {
   downloadedUris: Record<string, string>
   downloadingIds: Record<string, boolean>
   downloadProgress: Record<string, number>
-  loadDownloads: () => void
+  // User-defined ordering for the Downloads screen's "Manual" sort, an
+  // episode-id array. Reconciled against downloadedUris on every
+  // loadDownloads (new downloads appended at the end, removed ones dropped)
+  // so it never drifts out of sync with what's actually on disk.
+  downloadOrder: string[]
+  loadDownloads: () => Promise<void>
   downloadEpisode: (episode: Episode) => Promise<void>
   // Also drops the episode from the queue if it's in one — downloaded
   // specifically to listen offline, so once the file backing that is gone
@@ -364,6 +392,7 @@ interface AppState {
   // own removeFromQueueOnFinish for the "finished playing" case; this is the
   // "deleted the download" case.
   removeDownload: (episodeId: string) => void
+  reorderDownloads: (episodeIds: string[]) => Promise<void>
 
   // "Categories" in the mobile UI — backed by the same `stations` table
   // desktop uses for its Stations feature, reusing that data model as-is
@@ -547,6 +576,7 @@ export const useStore = create<AppState>((set, get) => {
   downloadedUris: {},
   downloadingIds: {},
   downloadProgress: {},
+  downloadOrder: [],
 
   stations: [],
   stationsLoaded: false,
@@ -1552,11 +1582,21 @@ export const useStore = create<AppState>((set, get) => {
     await saveQueue(episodeIds)
   },
 
-  loadDownloads: () => {
+  loadDownloads: async () => {
+    let downloadedUris: Record<string, string> = {}
     try {
-      set({ downloadedUris: listDownloadedUris() })
+      downloadedUris = listDownloadedUris()
     } catch (err) {
       console.error('[downloads] listing failed:', err)
+      return
+    }
+    const cachedOrder = await loadLocalDownloadOrder()
+    const stillDownloaded = cachedOrder.filter((id) => downloadedUris[id])
+    const missing = Object.keys(downloadedUris).filter((id) => !stillDownloaded.includes(id))
+    const downloadOrder = [...stillDownloaded, ...missing]
+    set({ downloadedUris, downloadOrder })
+    if (downloadOrder.length !== cachedOrder.length || downloadOrder.some((id, i) => id !== cachedOrder[i])) {
+      await saveLocalDownloadOrder(downloadOrder)
     }
   },
 
@@ -1574,6 +1614,11 @@ export const useStore = create<AppState>((set, get) => {
         set((state) => ({ downloadProgress: { ...state.downloadProgress, [episode.id]: fraction } }))
       })
       set((state) => ({ downloadedUris: { ...state.downloadedUris, [episode.id]: uri } }))
+      if (!get().downloadOrder.includes(episode.id)) {
+        const nextOrder = [...get().downloadOrder, episode.id]
+        set({ downloadOrder: nextOrder })
+        await saveLocalDownloadOrder(nextOrder)
+      }
     } catch (err) {
       console.error(`[downloads] failed for ${episode.id}:`, err)
     } finally {
@@ -1593,7 +1638,17 @@ export const useStore = create<AppState>((set, get) => {
       const { [episodeId]: _removed, ...rest } = state.downloadedUris
       return { downloadedUris: rest }
     })
+    if (get().downloadOrder.includes(episodeId)) {
+      const nextOrder = get().downloadOrder.filter((id) => id !== episodeId)
+      set({ downloadOrder: nextOrder })
+      void saveLocalDownloadOrder(nextOrder)
+    }
     if (get().queue.includes(episodeId)) get().removeFromQueue(episodeId)
+  },
+
+  reorderDownloads: async (episodeIds) => {
+    set({ downloadOrder: episodeIds })
+    await saveLocalDownloadOrder(episodeIds)
   },
 
   loadStations: async () => {

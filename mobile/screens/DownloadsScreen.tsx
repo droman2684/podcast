@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
-import { Play, Pause, Trash2, Settings, HardDriveDownload } from 'lucide-react-native'
+import { Play, Pause, Trash2, Settings, HardDriveDownload, ChevronUp, ChevronDown } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
@@ -12,16 +12,17 @@ interface DownloadItem {
   episode: Episode
 }
 
-type SortBy = 'newest' | 'oldest' | 'title' | 'show'
+type SortBy = 'newest' | 'oldest' | 'title' | 'show' | 'manual'
 
 const SORT_OPTIONS: { key: SortBy; label: string }[] = [
   { key: 'newest', label: 'Newest' },
   { key: 'oldest', label: 'Oldest' },
   { key: 'title', label: 'Title' },
-  { key: 'show', label: 'Show' }
+  { key: 'show', label: 'Show' },
+  { key: 'manual', label: 'Manual' }
 ]
 
-function sortItems(items: DownloadItem[], sortBy: SortBy): DownloadItem[] {
+function sortItems(items: DownloadItem[], sortBy: SortBy, downloadOrder: string[]): DownloadItem[] {
   const sorted = [...items]
   switch (sortBy) {
     case 'oldest':
@@ -36,6 +37,9 @@ function sortItems(items: DownloadItem[], sortBy: SortBy): DownloadItem[] {
           a.podcast.name.localeCompare(b.podcast.name) ||
           (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1)
       )
+      break
+    case 'manual':
+      sorted.sort((a, b) => downloadOrder.indexOf(a.episode.id) - downloadOrder.indexOf(b.episode.id))
       break
     default:
       sorted.sort((a, b) => (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1))
@@ -53,12 +57,17 @@ function formatRemaining(durationSec: number, positionSec: number): string {
   if (!durationSec) return ''
   const leftSec = Math.max(0, durationSec - positionSec)
   if (leftSec <= 0) return 'Played'
-  const m = Math.round(leftSec / 60)
-  return m > 0 ? `${m}m left` : '<1m left'
+  const totalMin = Math.round(leftSec / 60)
+  if (totalMin <= 0) return '<1m left'
+  const h = Math.floor(totalMin / 60)
+  const m = totalMin % 60
+  return h > 0 ? `${h}h ${m}m left` : `${m}m left`
 }
 
 export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSettings }: Props): React.JSX.Element {
   const downloadedUris = useStore((s) => s.downloadedUris)
+  const downloadOrder = useStore((s) => s.downloadOrder)
+  const reorderDownloads = useStore((s) => s.reorderDownloads)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const positions = useStore((s) => s.positions)
@@ -84,8 +93,23 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
         if (downloadedUris[episode.id]) out.push({ podcast, episode })
       }
     }
-    return sortItems(out, sortBy)
-  }, [downloadedUris, podcasts, episodesByPodcast, sortBy])
+    return sortItems(out, sortBy, downloadOrder)
+  }, [downloadedUris, podcasts, episodesByPodcast, sortBy, downloadOrder])
+
+  // Arrow buttons rather than drag-to-reorder — see QueueScreen's moveInQueue
+  // for why (a hand-rolled drag inside a ScrollView never felt reliable).
+  const moveInOrder = (episodeId: string, targetIndex: number): void => {
+    const currentIndex = downloadOrder.indexOf(episodeId)
+    if (currentIndex === -1) return
+    const clamped = Math.max(0, Math.min(downloadOrder.length - 1, targetIndex))
+    if (clamped === currentIndex) return
+    const next = [...downloadOrder]
+    const [moved] = next.splice(currentIndex, 1)
+    next.splice(clamped, 0, moved)
+    reorderDownloads(next)
+  }
+  const moveUp = (episodeId: string): void => moveInOrder(episodeId, downloadOrder.indexOf(episodeId) - 1)
+  const moveDown = (episodeId: string): void => moveInOrder(episodeId, downloadOrder.indexOf(episodeId) + 1)
 
   const handlePlayToggle = (podcastId: string, episodeId: string): void => {
     const willPlay = !(currentEpisodeId === episodeId && playing)
@@ -129,7 +153,7 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
         </View>
       ) : (
         <ScrollView contentContainerStyle={styles.listContent}>
-          {items.map((item) => {
+          {items.map((item, index) => {
             const isCurrent = currentEpisodeId === item.episode.id
             const positionSec = isCurrent ? currentTimeSec : (positions[item.episode.id] ?? 0)
             const durationSec = item.episode.durationSec > 0 ? item.episode.durationSec : isCurrent ? liveDuration : 0
@@ -141,6 +165,29 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
                 onDelete={() => removeDownload(item.episode.id)}
               >
                 <View style={styles.row}>
+                  {sortBy === 'manual' && (
+                    <View style={styles.moveControls}>
+                      <Pressable
+                        hitSlop={6}
+                        disabled={index === 0}
+                        onPress={() => moveUp(item.episode.id)}
+                        accessibilityLabel="Move up"
+                      >
+                        <ChevronUp size={18} color={index === 0 ? colors.textDisabled : colors.textMuted} />
+                      </Pressable>
+                      <Pressable
+                        hitSlop={6}
+                        disabled={index === items.length - 1}
+                        onPress={() => moveDown(item.episode.id)}
+                        accessibilityLabel="Move down"
+                      >
+                        <ChevronDown
+                          size={18}
+                          color={index === items.length - 1 ? colors.textDisabled : colors.textMuted}
+                        />
+                      </Pressable>
+                    </View>
+                  )}
                   <Pressable
                     style={styles.rowMain}
                     onPress={() => onPlay(item.podcast.id, item.episode.id, true)}
@@ -231,6 +278,7 @@ const styles = StyleSheet.create({
     ...cardShadow
   },
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  moveControls: { alignItems: 'center', gap: 2 },
   epTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
   metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   podcastName: { fontSize: 11, color: colors.textMuted, flexShrink: 1 },
