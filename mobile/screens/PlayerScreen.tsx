@@ -20,9 +20,16 @@ function nextSpeed(current: number): number {
 
 function formatTime(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) return '0:00'
-  const m = Math.floor(sec / 60)
+  const h = Math.floor(sec / 3600)
+  const m = Math.floor((sec % 3600) / 60)
   const s = Math.floor(sec % 60)
+  if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
   return `${m}:${s.toString().padStart(2, '0')}`
+}
+
+function formatRemaining(currentSec: number, durationSec: number): string {
+  const left = Math.max(0, durationSec - currentSec)
+  return `-${formatTime(left)}`
 }
 
 interface Props {
@@ -143,7 +150,7 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
       </View>
       <View style={styles.timeRow}>
         <Text style={styles.timeText}>{formatTime(displayedTimeSec)}</Text>
-        <Text style={styles.timeText}>{formatTime(duration)}</Text>
+        <Text style={styles.timeText}>{formatRemaining(displayedTimeSec, duration)}</Text>
       </View>
     </View>
   )

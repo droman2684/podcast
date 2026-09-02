@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
 import { Play, Pause, Trash2, Settings, HardDriveDownload, ChevronUp, ChevronDown } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
@@ -12,38 +12,9 @@ interface DownloadItem {
   episode: Episode
 }
 
-type SortBy = 'newest' | 'oldest' | 'title' | 'show' | 'manual'
-
-const SORT_OPTIONS: { key: SortBy; label: string }[] = [
-  { key: 'newest', label: 'Newest' },
-  { key: 'oldest', label: 'Oldest' },
-  { key: 'title', label: 'Title' },
-  { key: 'show', label: 'Show' },
-  { key: 'manual', label: 'Manual' }
-]
-
-function sortItems(items: DownloadItem[], sortBy: SortBy, downloadOrder: string[]): DownloadItem[] {
+function sortItems(items: DownloadItem[], downloadOrder: string[]): DownloadItem[] {
   const sorted = [...items]
-  switch (sortBy) {
-    case 'oldest':
-      sorted.sort((a, b) => (a.episode.pubDateIso < b.episode.pubDateIso ? -1 : 1))
-      break
-    case 'title':
-      sorted.sort((a, b) => a.episode.title.localeCompare(b.episode.title))
-      break
-    case 'show':
-      sorted.sort(
-        (a, b) =>
-          a.podcast.name.localeCompare(b.podcast.name) ||
-          (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1)
-      )
-      break
-    case 'manual':
-      sorted.sort((a, b) => downloadOrder.indexOf(a.episode.id) - downloadOrder.indexOf(b.episode.id))
-      break
-    default:
-      sorted.sort((a, b) => (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1))
-  }
+  sorted.sort((a, b) => downloadOrder.indexOf(a.episode.id) - downloadOrder.indexOf(b.episode.id))
   return sorted
 }
 
@@ -79,8 +50,6 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
   const togglePlay = useStore((s) => s.togglePlay)
   const removeDownload = useStore((s) => s.removeDownload)
 
-  const [sortBy, setSortBy] = useState<SortBy>('newest')
-
   // Downloaded episodes can outlive the podcast they came from being
   // rendered anywhere else (still on disk even if, say, a private feed's
   // credential goes missing) — matched up against episodesByPodcast/podcasts
@@ -93,8 +62,8 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
         if (downloadedUris[episode.id]) out.push({ podcast, episode })
       }
     }
-    return sortItems(out, sortBy, downloadOrder)
-  }, [downloadedUris, podcasts, episodesByPodcast, sortBy, downloadOrder])
+    return sortItems(out, downloadOrder)
+  }, [downloadedUris, podcasts, episodesByPodcast, downloadOrder])
 
   // Arrow buttons rather than drag-to-reorder — see QueueScreen's moveInQueue
   // for why (a hand-rolled drag inside a ScrollView never felt reliable).
@@ -127,20 +96,6 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
         </Pressable>
       </View>
 
-      {items.length > 0 && (
-        <View style={styles.sortRow}>
-          {SORT_OPTIONS.map(({ key, label }) => (
-            <Pressable
-              key={key}
-              style={[styles.sortBtn, sortBy === key && styles.sortBtnActive]}
-              onPress={() => setSortBy(key)}
-            >
-              <Text style={[styles.sortBtnText, sortBy === key && styles.sortBtnTextActive]}>{label}</Text>
-            </Pressable>
-          ))}
-        </View>
-      )}
-
       {items.length === 0 ? (
         <View style={styles.emptyState}>
           <HardDriveDownload size={32} color={colors.textDisabled} />
@@ -165,29 +120,27 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
                 onDelete={() => removeDownload(item.episode.id)}
               >
                 <View style={styles.row}>
-                  {sortBy === 'manual' && (
-                    <View style={styles.moveControls}>
-                      <Pressable
-                        hitSlop={6}
-                        disabled={index === 0}
-                        onPress={() => moveUp(item.episode.id)}
-                        accessibilityLabel="Move up"
-                      >
-                        <ChevronUp size={18} color={index === 0 ? colors.textDisabled : colors.textMuted} />
-                      </Pressable>
-                      <Pressable
-                        hitSlop={6}
-                        disabled={index === items.length - 1}
-                        onPress={() => moveDown(item.episode.id)}
-                        accessibilityLabel="Move down"
-                      >
-                        <ChevronDown
-                          size={18}
-                          color={index === items.length - 1 ? colors.textDisabled : colors.textMuted}
-                        />
-                      </Pressable>
-                    </View>
-                  )}
+                  <View style={styles.moveControls}>
+                    <Pressable
+                      hitSlop={6}
+                      disabled={index === 0}
+                      onPress={() => moveUp(item.episode.id)}
+                      accessibilityLabel="Move up"
+                    >
+                      <ChevronUp size={18} color={index === 0 ? colors.textDisabled : colors.textMuted} />
+                    </Pressable>
+                    <Pressable
+                      hitSlop={6}
+                      disabled={index === items.length - 1}
+                      onPress={() => moveDown(item.episode.id)}
+                      accessibilityLabel="Move down"
+                    >
+                      <ChevronDown
+                        size={18}
+                        color={index === items.length - 1 ? colors.textDisabled : colors.textMuted}
+                      />
+                    </Pressable>
+                  </View>
                   <Pressable
                     style={styles.rowMain}
                     onPress={() => onPlay(item.podcast.id, item.episode.id, true)}
@@ -254,16 +207,6 @@ const styles = StyleSheet.create({
     marginBottom: 16
   },
   title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary },
-  sortRow: { flexDirection: 'row', gap: 8, paddingHorizontal: 20, marginBottom: 16 },
-  sortBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: radii.pill,
-    backgroundColor: '#e8e8ed'
-  },
-  sortBtnActive: { backgroundColor: colors.accent },
-  sortBtnText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
-  sortBtnTextActive: { color: '#fff' },
   listContent: { paddingHorizontal: 20, paddingBottom: 20 },
   row: {
     flexDirection: 'row',

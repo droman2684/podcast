@@ -43,7 +43,7 @@ interface Props {
   mode?: LayoutMode
 }
 
-const ROW_HEIGHT = 76
+const ROW_HEIGHT = 92
 
 function formatRemaining(durationSec: number, positionSec: number): string {
   if (!durationSec) return ''
@@ -246,6 +246,9 @@ export default function QueueScreen({
                 <Text style={styles.remaining}> · {formatRemaining(durationSec, positionSec)}</Text>
               )}
             </View>
+            <Text style={styles.descPreview} numberOfLines={2}>
+              {stripHtml(item.episode.description)}
+            </Text>
             {positionSec > 0 && (
               <View style={styles.progressTrack}>
                 <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
@@ -617,6 +620,7 @@ const styles = StyleSheet.create({
   metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   podcastName: { fontSize: 11, color: colors.textMuted, flexShrink: 1 },
   remaining: { fontSize: 11, color: colors.textMuted },
+  descPreview: { fontSize: 11.5, color: colors.textMuted, marginTop: 3, lineHeight: 15 },
   progressTrack: {
     height: 3,
     borderRadius: 1.5,
