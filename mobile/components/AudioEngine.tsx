@@ -132,10 +132,16 @@ export default function AudioEngine(): null {
     }
   }, [status.isLoaded, episode?.id, player, fetchLatestPosition])
 
+  // status.isLoaded is in the deps so autoplay actually takes effect: right
+  // after switching episodes, player.replace() has been called but the new
+  // source hasn't finished loading yet, so a play() issued in that same tick
+  // is silently dropped by expo-audio. Re-running once isLoaded flips true
+  // catches that case — without it, autoplaying from Queue/Downloads left
+  // the episode paused until the user tapped play a second time.
   useEffect(() => {
     if (playing) player.play()
     else player.pause()
-  }, [playing, episode?.id, player])
+  }, [playing, episode?.id, status.isLoaded, player])
 
   // Flushes on every playing -> paused transition, keyed only on `playing`
   // itself (not episode?.id) so this doesn't also fire — using the wrong
