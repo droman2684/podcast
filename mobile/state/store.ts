@@ -138,6 +138,45 @@ async function saveLocalDownloadOrder(order: string[]): Promise<void> {
   }
 }
 
+// Snapshot of the episode + podcast metadata (title, artwork, description,
+// etc.) needed to render a downloaded episode's row, taken at download time
+// and cached locally. The actual audio file lives on disk and is listed
+// instantly (listDownloadedUris), but rendering a row also needs episode/
+// podcast metadata, which otherwise only exists in `episodesByPodcast`/
+// `podcasts` — populated by loadLibrary()'s full RSS re-fetch of every
+// subscription, a multi-second network round trip on every cold start. That
+// made the Downloads tab (now the app's default landing tab) sit empty for
+// however long that fetch took, even though the downloaded files themselves
+// were already sitting on disk. Hydrating from this cache at startup (see
+// loadCachedDownloadedSnapshots below), before loadLibrary has a chance to
+// run, lets Downloads render immediately; loadLibrary's normal per-podcast
+// merge then transparently replaces each seeded stub with the fresh,
+// complete feed data once it lands.
+const DOWNLOADED_SNAPSHOT_STORAGE_KEY = 'empirepod.downloadedSnapshot.v1'
+
+interface DownloadedSnapshot {
+  episode: Episode
+  podcast: Podcast
+}
+
+async function loadLocalDownloadedSnapshots(): Promise<Record<string, DownloadedSnapshot>> {
+  try {
+    const raw = await AsyncStorage.getItem(DOWNLOADED_SNAPSHOT_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, DownloadedSnapshot>) : {}
+  } catch (err) {
+    console.error('[downloads] snapshot load failed:', err)
+    return {}
+  }
+}
+
+async function saveLocalDownloadedSnapshots(snapshots: Record<string, DownloadedSnapshot>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(DOWNLOADED_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshots))
+  } catch (err) {
+    console.error('[downloads] snapshot save failed:', err)
+  }
+}
+
 async function loadLocalPositions(): Promise<Record<string, number>> {
   try {
     const raw = await AsyncStorage.getItem(POSITIONS_STORAGE_KEY)
@@ -345,6 +384,10 @@ interface AppState {
   // Same idea, for custom artwork overrides — see ARTWORK_STORAGE_KEY's doc
   // comment.
   loadCachedArtwork: () => Promise<void>
+  // Seeds `podcasts`/`episodesByPodcast` with just enough data to render
+  // already-downloaded episodes before loadLibrary's network fetch lands —
+  // see DOWNLOADED_SNAPSHOT_STORAGE_KEY's doc comment.
+  loadCachedDownloadedSnapshots: () => Promise<void>
   savePosition: (episodeId: string, positionSec: number) => Promise<void>
   // Fetches the authoritative position for one episode straight from
   // Supabase rather than trusting the local `positions` cache, which can be
@@ -603,6 +646,24 @@ export const useStore = create<AppState>((set, get) => {
   loadCachedArtwork: async () => {
     const cached = await loadLocalArtwork()
     set({ customArtworkOverrides: cached })
+  },
+
+  // Only ever sets, never merges into, `podcasts`/`episodesByPodcast` — this
+  // runs at startup before loadLibrary has had any chance to populate real
+  // data, so there's nothing yet to preserve. loadLibrary's own per-podcast
+  // merge (mergeFeed) and final sweep transparently replace/drop these
+  // stubs once the real feed data lands, same as any other podcast.
+  loadCachedDownloadedSnapshots: async () => {
+    const snapshots = await loadLocalDownloadedSnapshots()
+    const entries = Object.values(snapshots)
+    if (entries.length === 0) return
+    const podcastsById = new Map<string, Podcast>()
+    const episodesByPodcast: Record<string, Episode[]> = {}
+    for (const { episode, podcast } of entries) {
+      podcastsById.set(podcast.id, podcast)
+      ;(episodesByPodcast[podcast.id] ??= []).push(episode)
+    }
+    set({ podcasts: Array.from(podcastsById.values()), episodesByPodcast })
   },
 
   loadSettings: async () => {
@@ -1608,6 +1669,15 @@ export const useStore = create<AppState>((set, get) => {
     if (downloadOrder.length !== cachedOrder.length || downloadOrder.some((id, i) => id !== cachedOrder[i])) {
       await saveLocalDownloadOrder(downloadOrder)
     }
+    // Drop any snapshot whose file no longer exists (e.g. removed while this
+    // device was offline/closed, so removeDownload's own prune below never
+    // ran for it) — same reconciliation idea as downloadOrder above.
+    const snapshots = await loadLocalDownloadedSnapshots()
+    const staleIds = Object.keys(snapshots).filter((id) => !downloadedUris[id])
+    if (staleIds.length > 0) {
+      for (const id of staleIds) delete snapshots[id]
+      await saveLocalDownloadedSnapshots(snapshots)
+    }
   },
 
   downloadEpisode: async (episode) => {
@@ -1628,6 +1698,17 @@ export const useStore = create<AppState>((set, get) => {
         const nextOrder = [...get().downloadOrder, episode.id]
         set({ downloadOrder: nextOrder })
         await saveLocalDownloadOrder(nextOrder)
+      }
+      // Snapshot the episode/podcast metadata needed to render this row
+      // instantly on a future cold start, before loadLibrary's network
+      // fetch has a chance to run — see DOWNLOADED_SNAPSHOT_STORAGE_KEY's
+      // doc comment. Best-effort only: if `podcast` isn't in the store yet
+      // (shouldn't normally happen — downloading requires an already-loaded
+      // episode) there's nothing to snapshot, so just skip it.
+      if (podcast) {
+        const snapshots = await loadLocalDownloadedSnapshots()
+        snapshots[episode.id] = { episode, podcast }
+        await saveLocalDownloadedSnapshots(snapshots)
       }
       // Downloading an episode is a strong enough "I want to listen to this"
       // signal to also queue it — mirrors loadLibrary's auto-download-new-
@@ -1660,6 +1741,11 @@ export const useStore = create<AppState>((set, get) => {
       void saveLocalDownloadOrder(nextOrder)
     }
     if (get().queue.includes(episodeId)) get().removeFromQueue(episodeId)
+    void loadLocalDownloadedSnapshots().then((snapshots) => {
+      if (!(episodeId in snapshots)) return
+      delete snapshots[episodeId]
+      return saveLocalDownloadedSnapshots(snapshots)
+    })
   },
 
   reorderDownloads: async (episodeIds) => {

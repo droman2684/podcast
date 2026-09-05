@@ -44,6 +44,7 @@ export default function App(): React.JSX.Element {
   const loadCachedPositions = useStore((s) => s.loadCachedPositions)
   const loadCachedQueue = useStore((s) => s.loadCachedQueue)
   const loadCachedArtwork = useStore((s) => s.loadCachedArtwork)
+  const loadCachedDownloadedSnapshots = useStore((s) => s.loadCachedDownloadedSnapshots)
   const loadDownloads = useStore((s) => s.loadDownloads)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
@@ -85,8 +86,21 @@ export default function App(): React.JSX.Element {
     loadCachedPositions()
     loadCachedQueue()
     loadCachedArtwork()
+    // Seeds podcasts/episodesByPodcast for downloaded episodes before
+    // loadLibrary's network fetch has a chance to run, so Downloads (the
+    // default landing tab) doesn't sit empty for however long that takes —
+    // see loadCachedDownloadedSnapshots' doc comment.
+    loadCachedDownloadedSnapshots()
     loadDownloads()
-  }, [initAuth, loadSettings, loadCachedPositions, loadCachedQueue, loadCachedArtwork, loadDownloads])
+  }, [
+    initAuth,
+    loadSettings,
+    loadCachedPositions,
+    loadCachedQueue,
+    loadCachedArtwork,
+    loadCachedDownloadedSnapshots,
+    loadDownloads
+  ])
 
   // Loads once per sign-in, not once per Library-tab visit — LibraryScreen
   // itself only re-fetches on an explicit pull-to-refresh.
