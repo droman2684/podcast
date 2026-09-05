@@ -15,9 +15,9 @@ export const RAIL_WIDTH = 88
 // Same destinations, same order, same icons as TabBar.tsx — rotating an
 // iPad shouldn't rearrange the app.
 const ITEMS: { key: Tab; label: string; Icon: typeof Library }[] = [
+  { key: 'downloads', label: 'Downloads', Icon: HardDriveDownload },
   { key: 'queue', label: 'Queue', Icon: ListOrdered },
   { key: 'library', label: 'Library', Icon: Library },
-  { key: 'downloads', label: 'Downloads', Icon: HardDriveDownload },
   { key: 'discover', label: 'Discover', Icon: Sparkles }
 ]
 

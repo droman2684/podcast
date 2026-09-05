@@ -5,9 +5,9 @@ import { colors } from '../theme'
 export type Tab = 'library' | 'discover' | 'queue' | 'downloads'
 
 const TABS: { key: Tab; label: string; Icon: typeof Library }[] = [
+  { key: 'downloads', label: 'Downloads', Icon: HardDriveDownload },
   { key: 'queue', label: 'Queue', Icon: ListOrdered },
   { key: 'library', label: 'Library', Icon: Library },
-  { key: 'downloads', label: 'Downloads', Icon: HardDriveDownload },
   { key: 'discover', label: 'Discover', Icon: Sparkles }
 ]
 
