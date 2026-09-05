@@ -1,6 +1,16 @@
 import { useMemo } from 'react'
-import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
-import { Play, Pause, Trash2, Settings, HardDriveDownload, ChevronUp, ChevronDown } from 'lucide-react-native'
+import { View, Text, Pressable, StyleSheet } from 'react-native'
+import DraggableFlatList from 'react-native-draggable-flatlist'
+import {
+  Play,
+  Pause,
+  Trash2,
+  Settings,
+  HardDriveDownload,
+  ChevronUp,
+  ChevronDown,
+  GripVertical
+} from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
@@ -65,8 +75,9 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
     return sortItems(out, downloadOrder)
   }, [downloadedUris, podcasts, episodesByPodcast, downloadOrder])
 
-  // Arrow buttons rather than drag-to-reorder — see QueueScreen's moveInQueue
-  // for why (a hand-rolled drag inside a ScrollView never felt reliable).
+  // Real drag-and-drop via react-native-draggable-flatlist (see QueueScreen's
+  // moveInQueue for the history of why a hand-rolled PanResponder drag was
+  // dropped in favor of arrows) — arrows stay as a fallback alongside it.
   const moveInOrder = (episodeId: string, targetIndex: number): void => {
     const currentIndex = downloadOrder.indexOf(episodeId)
     if (currentIndex === -1) return
@@ -85,6 +96,81 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
     if (currentEpisodeId === episodeId) togglePlay()
     else loadEpisode(episodeId, { autoplay: true })
     if (willPlay) onPlay(podcastId, episodeId)
+  }
+
+  const renderRow = (item: DownloadItem, index: number, drag?: () => void, isActive?: boolean): React.JSX.Element => {
+    const isCurrent = currentEpisodeId === item.episode.id
+    const positionSec = isCurrent ? currentTimeSec : (positions[item.episode.id] ?? 0)
+    const durationSec = item.episode.durationSec > 0 ? item.episode.durationSec : isCurrent ? liveDuration : 0
+    const progress = durationSec > 0 ? Math.min(1, positionSec / durationSec) : 0
+    return (
+      <SwipeToDelete deleteLabel="Remove" onDelete={() => removeDownload(item.episode.id)}>
+        <View style={[styles.row, isActive && styles.rowDragging]}>
+          <View style={styles.moveControls}>
+            {drag && (
+              <Pressable hitSlop={6} onLongPress={drag} delayLongPress={150} accessibilityLabel="Drag to reorder">
+                <GripVertical size={16} color={colors.textDisabled} />
+              </Pressable>
+            )}
+            <Pressable
+              hitSlop={6}
+              disabled={index === 0}
+              onPress={() => moveUp(item.episode.id)}
+              accessibilityLabel="Move up"
+            >
+              <ChevronUp size={18} color={index === 0 ? colors.textDisabled : colors.textMuted} />
+            </Pressable>
+            <Pressable
+              hitSlop={6}
+              disabled={index === items.length - 1}
+              onPress={() => moveDown(item.episode.id)}
+              accessibilityLabel="Move down"
+            >
+              <ChevronDown size={18} color={index === items.length - 1 ? colors.textDisabled : colors.textMuted} />
+            </Pressable>
+          </View>
+          <Pressable style={styles.rowMain} onPress={() => onPlay(item.podcast.id, item.episode.id, true)}>
+            <Artwork
+              url={item.podcast.customArtworkUrl ?? item.episode.artworkUrl ?? item.podcast.artworkUrl}
+              size={44}
+              radius={radii.artworkSm}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.epTitle} numberOfLines={1}>
+                {item.episode.title}
+              </Text>
+              <View style={styles.metaRow}>
+                <Text style={styles.podcastName} numberOfLines={1}>
+                  {item.podcast.name}
+                </Text>
+                {positionSec > 0 && (
+                  <Text style={styles.remaining}> · {formatRemaining(durationSec, positionSec)}</Text>
+                )}
+              </View>
+              {positionSec > 0 && (
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+                </View>
+              )}
+            </View>
+          </Pressable>
+          <Pressable hitSlop={10} onPress={() => removeDownload(item.episode.id)} accessibilityLabel="Remove download">
+            <Trash2 size={17} color={colors.textMuted} />
+          </Pressable>
+          <Pressable
+            hitSlop={10}
+            onPress={() => handlePlayToggle(item.podcast.id, item.episode.id)}
+            accessibilityLabel={isCurrent && playing ? 'Pause' : 'Play'}
+          >
+            {isCurrent && playing ? (
+              <Pause size={18} color={colors.accent} fill={colors.accent} />
+            ) : (
+              <Play size={18} color={colors.accent} fill={colors.accent} />
+            )}
+          </Pressable>
+        </View>
+      </SwipeToDelete>
+    )
   }
 
   return (
@@ -107,91 +193,14 @@ export default function DownloadsScreen({ onPlay, onBrowseLibrary, onOpenAppSett
           </Pressable>
         </View>
       ) : (
-        <ScrollView contentContainerStyle={styles.listContent}>
-          {items.map((item, index) => {
-            const isCurrent = currentEpisodeId === item.episode.id
-            const positionSec = isCurrent ? currentTimeSec : (positions[item.episode.id] ?? 0)
-            const durationSec = item.episode.durationSec > 0 ? item.episode.durationSec : isCurrent ? liveDuration : 0
-            const progress = durationSec > 0 ? Math.min(1, positionSec / durationSec) : 0
-            return (
-              <SwipeToDelete
-                key={item.episode.id}
-                deleteLabel="Remove"
-                onDelete={() => removeDownload(item.episode.id)}
-              >
-                <View style={styles.row}>
-                  <View style={styles.moveControls}>
-                    <Pressable
-                      hitSlop={6}
-                      disabled={index === 0}
-                      onPress={() => moveUp(item.episode.id)}
-                      accessibilityLabel="Move up"
-                    >
-                      <ChevronUp size={18} color={index === 0 ? colors.textDisabled : colors.textMuted} />
-                    </Pressable>
-                    <Pressable
-                      hitSlop={6}
-                      disabled={index === items.length - 1}
-                      onPress={() => moveDown(item.episode.id)}
-                      accessibilityLabel="Move down"
-                    >
-                      <ChevronDown
-                        size={18}
-                        color={index === items.length - 1 ? colors.textDisabled : colors.textMuted}
-                      />
-                    </Pressable>
-                  </View>
-                  <Pressable
-                    style={styles.rowMain}
-                    onPress={() => onPlay(item.podcast.id, item.episode.id, true)}
-                  >
-                    <Artwork
-                      url={item.podcast.customArtworkUrl ?? item.episode.artworkUrl ?? item.podcast.artworkUrl}
-                      size={44}
-                      radius={radii.artworkSm}
-                    />
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.epTitle} numberOfLines={1}>
-                        {item.episode.title}
-                      </Text>
-                      <View style={styles.metaRow}>
-                        <Text style={styles.podcastName} numberOfLines={1}>
-                          {item.podcast.name}
-                        </Text>
-                        {positionSec > 0 && (
-                          <Text style={styles.remaining}> · {formatRemaining(durationSec, positionSec)}</Text>
-                        )}
-                      </View>
-                      {positionSec > 0 && (
-                        <View style={styles.progressTrack}>
-                          <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
-                        </View>
-                      )}
-                    </View>
-                  </Pressable>
-                  <Pressable
-                    hitSlop={10}
-                    onPress={() => removeDownload(item.episode.id)}
-                    accessibilityLabel="Remove download"
-                  >
-                    <Trash2 size={17} color={colors.textMuted} />
-                  </Pressable>
-                  <Pressable
-                    hitSlop={10}
-                    onPress={() => handlePlayToggle(item.podcast.id, item.episode.id)}
-                    accessibilityLabel={isCurrent && playing ? 'Pause' : 'Play'}
-                  >
-                    {isCurrent && playing ? (
-                      <Pause size={18} color={colors.accent} fill={colors.accent} />
-                    ) : (
-                      <Play size={18} color={colors.accent} fill={colors.accent} />
-                    )}
-                  </Pressable>
-                </View>
-              </SwipeToDelete>
-            )
-          })}
-        </ScrollView>
+        <DraggableFlatList
+          data={items}
+          keyExtractor={(item) => item.episode.id}
+          contentContainerStyle={styles.listContent}
+          activationDistance={8}
+          onDragEnd={({ data }) => reorderDownloads(data.map((i) => i.episode.id))}
+          renderItem={({ item, drag, isActive, getIndex }) => renderRow(item, getIndex() ?? 0, drag, isActive)}
+        />
       )}
     </View>
   )
@@ -221,6 +230,7 @@ const styles = StyleSheet.create({
     ...cardShadow
   },
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  rowDragging: { opacity: 0.85, ...cardShadow },
   moveControls: { alignItems: 'center', gap: 2 },
   epTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },
   metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { View, Text, Pressable, ScrollView, Modal, ActivityIndicator, StyleSheet, Alert } from 'react-native'
+import DraggableFlatList from 'react-native-draggable-flatlist'
 import {
   ChevronUp,
   ChevronDown,
@@ -13,7 +14,8 @@ import {
   Trash2,
   Settings,
   CheckCircle2,
-  Circle
+  Circle,
+  GripVertical
 } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { groupByPodcast } from '@shared/queueView'
@@ -115,11 +117,14 @@ export default function QueueScreen({
     if (willPlay) onPlay(podcastId, episodeId)
   }
 
-  // Replaced drag-to-reorder per request — a hand-rolled PanResponder drag
-  // inside a ScrollView never felt reliable (grip hit target, scroll vs.
-  // drag gesture conflicts). Arrow buttons are slower for a big jump but
-  // every tap does exactly what it says, plus Move to Top/Bottom in the
-  // detail modal for the big jumps arrows alone would be tedious for.
+  // A hand-rolled PanResponder drag was tried once and removed for feeling
+  // unreliable inside a ScrollView (grip hit target, scroll vs. drag gesture
+  // conflicts) — the arrow buttons below were the fallback. Real
+  // click-and-drag is now handled by react-native-draggable-flatlist (a
+  // gesture-handler + reanimated list built for exactly this, restricted to
+  // its own long-press grip handle so it can't fight SwipeToDelete's
+  // horizontal gesture on the rest of the row); arrows stay as a fallback
+  // for anyone who'd rather tap than drag.
   const moveInQueue = (episodeId: string, targetIndex: number): void => {
     const currentIndex = queue.indexOf(episodeId)
     if (currentIndex === -1) return
@@ -170,7 +175,12 @@ export default function QueueScreen({
     )
   }
 
-  const renderRow = (item: QueueItem, position?: { index: number; total: number }): React.JSX.Element => {
+  const renderRow = (
+    item: QueueItem,
+    position?: { index: number; total: number },
+    drag?: () => void,
+    isActive?: boolean
+  ): React.JSX.Element => {
     const isCurrent = currentEpisodeId === item.episode.id
     const downloaded = Boolean(downloadedUris[item.episode.id])
     const downloading = Boolean(downloadingIds[item.episode.id])
@@ -189,7 +199,7 @@ export default function QueueScreen({
     const selected = isTablet && detailItem?.episode.id === item.episode.id
     const checked = selectedIds.has(item.episode.id)
     return (
-      <View style={[styles.row, selected && styles.rowSelected]}>
+      <View style={[styles.row, selected && styles.rowSelected, isActive && styles.rowDragging]}>
         {selecting ? (
           <Pressable hitSlop={6} onPress={() => toggleSelected(item.episode.id)} accessibilityLabel="Select episode">
             {checked ? (
@@ -201,6 +211,16 @@ export default function QueueScreen({
         ) : (
           position && (
             <View style={styles.moveControls}>
+              {drag && (
+                <Pressable
+                  hitSlop={6}
+                  onLongPress={drag}
+                  delayLongPress={150}
+                  accessibilityLabel="Drag to reorder"
+                >
+                  <GripVertical size={16} color={colors.textDisabled} />
+                </Pressable>
+              )}
               <Pressable
                 hitSlop={6}
                 disabled={position.index === 0}
@@ -326,18 +346,25 @@ export default function QueueScreen({
           )
         })}
       </ScrollView>
-    ) : (
+    ) : selecting ? (
       <ScrollView contentContainerStyle={styles.listContent}>
-        {items.map((item, index) =>
-          selecting ? (
-            <View key={item.episode.id}>{renderRow(item, { index, total: items.length })}</View>
-          ) : (
-            <SwipeToDelete key={item.episode.id} deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
-              {renderRow(item, { index, total: items.length })}
-            </SwipeToDelete>
-          )
-        )}
+        {items.map((item, index) => (
+          <View key={item.episode.id}>{renderRow(item, { index, total: items.length })}</View>
+        ))}
       </ScrollView>
+    ) : (
+      <DraggableFlatList
+        data={items}
+        keyExtractor={(item) => item.episode.id}
+        contentContainerStyle={styles.listContent}
+        activationDistance={8}
+        onDragEnd={({ data }) => reorderQueue(data.map((i) => i.episode.id))}
+        renderItem={({ item, drag, isActive, getIndex }) => (
+          <SwipeToDelete deleteLabel="Remove" onDelete={() => removeFromQueue(item.episode.id)}>
+            {renderRow(item, { index: getIndex() ?? 0, total: items.length }, drag, isActive)}
+          </SwipeToDelete>
+        )}
+      />
     )
 
   // Shared between the phone's bottom-sheet Modal and the iPad detail pane
@@ -614,6 +641,7 @@ const styles = StyleSheet.create({
   // iPad SplitView selection ring (spec §6) — see LibraryScreen's
   // gridCardSelected/listRowSelected for the same pattern.
   rowSelected: { borderWidth: 2, borderColor: colors.accent },
+  rowDragging: { opacity: 0.85, ...cardShadow },
   moveControls: { alignItems: 'center', gap: 2 },
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
   epTitle: { fontSize: 13, fontWeight: '600', color: colors.textPrimary },

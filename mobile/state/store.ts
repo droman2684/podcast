@@ -49,7 +49,7 @@ interface LocalSettings {
 
 const DEFAULT_SETTINGS: LocalSettings = {
   skipBackSec: 15,
-  skipForwardSec: 15,
+  skipForwardSec: 30,
   defaultLibraryView: 'grid',
   queueGroupedByShow: false
 }
@@ -1043,6 +1043,16 @@ export const useStore = create<AppState>((set, get) => {
           await saveQueue(nextQueue)
           console.log(`[loadLibrary] auto-queued ${toAdd.length} new episode(s)`)
         }
+
+        // Auto-download every genuinely new episode so it's ready offline by
+        // the time the user gets to it, same "new since last seen" set used
+        // for auto-queueing above. Not awaited — loadLibrary shouldn't sit
+        // blocked on however long a batch of downloads takes, and each
+        // download's own state (downloadingIds/downloadProgress) already
+        // renders fine while the rest of the app carries on.
+        void mapWithConcurrency(newEpisodes, 2, (e) => get().downloadEpisode(e)).then(() => {
+          console.log(`[loadLibrary] auto-downloaded ${newEpisodes.length} new episode(s)`)
+        })
       }
 
       // Final sweep to drop any podcast that's no longer subscribed (e.g.

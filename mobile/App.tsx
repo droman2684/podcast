@@ -59,7 +59,7 @@ export default function App(): React.JSX.Element {
   const subscribeRealtime = useStore((s) => s.subscribeRealtime)
   const unsubscribeRealtime = useStore((s) => s.unsubscribeRealtime)
 
-  const [tab, setTab] = useState<Tab>('queue')
+  const [tab, setTab] = useState<Tab>('downloads')
   const [route, setRoute] = useState<Route>({ name: 'tabs' })
   // Wherever the Player was opened FROM, so its back button returns there
   // instead of always assuming "the show's episode list" — e.g. opened from
@@ -210,7 +210,7 @@ export default function App(): React.JSX.Element {
       <EpisodeListScreen
         podcast={podcast}
         onBack={goToTabs}
-        onPlay={(episodeId) => openPlayer(podcast.id, episodeId)}
+        onPlay={(episodeId) => openPlayer(podcast.id, episodeId, true)}
         onOpenSettings={openSettings}
       />
     ) : (
@@ -320,7 +320,7 @@ export default function App(): React.JSX.Element {
               <EpisodeListScreen
                 podcast={selectedPodcast}
                 onBack={goToTabs}
-                onPlay={(episodeId) => openPlayer(selectedPodcast.id, episodeId)}
+                onPlay={(episodeId) => openPlayer(selectedPodcast.id, episodeId, true)}
                 onOpenSettings={openSettings}
                 embedded
               />

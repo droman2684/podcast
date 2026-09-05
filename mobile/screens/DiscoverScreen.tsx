@@ -5,6 +5,7 @@ import type { DiscoverPodcast } from '@shared/types'
 import { CATEGORY_GENRE_IDS, getCategoryPicks, getPodcastOfTheDay, searchPodcasts } from '../lib/itunes'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
+import PodcastPreviewScreen from './PodcastPreviewScreen'
 import { colors, radii, cardShadow } from '../theme'
 
 const CATEGORIES = Object.keys(CATEGORY_GENRE_IDS)
@@ -35,6 +36,10 @@ export default function DiscoverScreen({ onOpenAppSettings, onAddPrivateFeed }: 
   const [searchError, setSearchError] = useState<string | null>(null)
   const [hasSearched, setHasSearched] = useState(false)
   const [subscribeError, setSubscribeError] = useState<string | null>(null)
+  // Tapping a row now opens a preview (show info + episode list) rather than
+  // subscribing right away — Subscribe there is the only thing that actually
+  // adds the show. See PodcastPreviewScreen's doc comment.
+  const [previewPodcast, setPreviewPodcast] = useState<DiscoverPodcast | null>(null)
   const searchActive = term.trim().length > 0
   const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -103,7 +108,7 @@ export default function DiscoverScreen({ onOpenAppSettings, onAddPrivateFeed }: 
   const renderPodcastRow = (item: DiscoverPodcast): React.JSX.Element => {
     const subscribed = subscribedIds.has(item.id)
     return (
-      <View style={styles.row} key={item.id}>
+      <Pressable style={styles.row} key={item.id} onPress={() => setPreviewPodcast(item)}>
         <Artwork url={item.artworkUrl} size={48} radius={radii.artworkSm} />
         <View style={{ flex: 1 }}>
           <Text style={styles.name} numberOfLines={1}>
@@ -120,7 +125,7 @@ export default function DiscoverScreen({ onOpenAppSettings, onAddPrivateFeed }: 
         >
           <Text style={styles.subBtnText}>{subscribed ? 'Added' : subscribingId === item.id ? '…' : 'Subscribe'}</Text>
         </Pressable>
-      </View>
+      </Pressable>
     )
   }
 
@@ -182,10 +187,7 @@ export default function DiscoverScreen({ onOpenAppSettings, onAddPrivateFeed }: 
       ) : (
         <>
           {dailyPick && (
-            <Pressable
-              style={styles.dailyPick}
-              onPress={() => !subscribedIds.has(dailyPick.id) && handleSubscribe(dailyPick)}
-            >
+            <Pressable style={styles.dailyPick} onPress={() => setPreviewPodcast(dailyPick)}>
               <Artwork url={dailyPick.artworkUrl} size={52} radius={10} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.dailyPickLabel}>Podcast of the day</Text>
@@ -218,10 +220,7 @@ export default function DiscoverScreen({ onOpenAppSettings, onAddPrivateFeed }: 
               columnWrapperStyle={styles.picksRow}
               contentContainerStyle={styles.picksContent}
               renderItem={({ item }) => (
-                <Pressable
-                  style={styles.pickCard}
-                  onPress={() => !subscribedIds.has(item.id) && handleSubscribe(item)}
-                >
+                <Pressable style={styles.pickCard} onPress={() => setPreviewPodcast(item)}>
                   <Artwork url={item.artworkUrl} size={PICK_ART_SIZE} radius={10} />
                   <Text style={styles.pickName} numberOfLines={2}>
                     {item.name}
@@ -235,6 +234,14 @@ export default function DiscoverScreen({ onOpenAppSettings, onAddPrivateFeed }: 
           )}
         </>
       )}
+
+      <PodcastPreviewScreen
+        podcast={previewPodcast}
+        subscribed={previewPodcast ? subscribedIds.has(previewPodcast.id) : false}
+        subscribing={previewPodcast ? subscribingId === previewPodcast.id : false}
+        onSubscribe={handleSubscribe}
+        onClose={() => setPreviewPodcast(null)}
+      />
     </View>
   )
 }
