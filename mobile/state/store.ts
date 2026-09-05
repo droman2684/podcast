@@ -1629,6 +1629,12 @@ export const useStore = create<AppState>((set, get) => {
         set({ downloadOrder: nextOrder })
         await saveLocalDownloadOrder(nextOrder)
       }
+      // Downloading an episode is a strong enough "I want to listen to this"
+      // signal to also queue it — mirrors loadLibrary's auto-download-new-
+      // episodes path, which already queues first and downloads second;
+      // this covers the other direction, a manual download from Library/
+      // Queue/Downloads. addToQueue no-ops if it's already queued.
+      await get().addToQueue(episode.id)
     } catch (err) {
       console.error(`[downloads] failed for ${episode.id}:`, err)
     } finally {
