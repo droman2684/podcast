@@ -1,12 +1,13 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
 import { ChevronDown, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward } from 'lucide-react-native'
-import type { Episode, Podcast } from '@shared/types'
+import type { Chapter, Episode, Podcast } from '@shared/types'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import { stripHtml } from '../lib/stripHtml'
 import { useScrubBar } from '../lib/useScrubBar'
+import { fetchChapters } from '../lib/chapters'
 import { buildEpisodeIndex } from '../lib/episodeIndex'
 import { colors, radii } from '../theme'
 import type { LayoutMode } from '../lib/useLayout'
@@ -69,6 +70,70 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
 
   const description = stripHtml(episode.description)
   const isTablet = mode !== 'compact'
+
+  // Podcasting 2.0 <podcast:chapters> is optional and per-episode, so this
+  // refetches whenever the loaded episode changes rather than living in the
+  // global store — mirrors the desktop app's NowPlayingExpanded pattern.
+  const [chapters, setChapters] = useState<Chapter[]>([])
+  useEffect(() => {
+    if (!episode.chaptersUrl) {
+      setChapters([])
+      return
+    }
+    let cancelled = false
+    fetchChapters(episode.chaptersUrl).then((result) => {
+      if (!cancelled) setChapters(result)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [episode.chaptersUrl])
+
+  const currentChapterIndex = useMemo(() => {
+    if (chapters.length === 0) return -1
+    let idx = -1
+    for (let i = 0; i < chapters.length; i++) {
+      if (chapters[i].startTime <= displayedTimeSec) idx = i
+      else break
+    }
+    return idx
+  }, [chapters, displayedTimeSec])
+
+  const chapterTicks =
+    duration > 0 && chapters.length > 0 ? (
+      <View style={styles.chapterTicks} pointerEvents="none">
+        {chapters.map((chapter, i) => (
+          <View
+            key={i}
+            style={[styles.chapterTick, { left: `${(chapter.startTime / duration) * 100}%` }]}
+          />
+        ))}
+      </View>
+    ) : null
+
+  const chaptersSection =
+    chapters.length > 0 ? (
+      <View style={styles.descriptionSection}>
+        <Text style={styles.sectionTitle}>Chapters</Text>
+        <View style={styles.chapterList}>
+          {chapters.map((chapter, i) => (
+            <Pressable
+              key={i}
+              style={styles.chapterRow}
+              onPress={() => requestSeek(chapter.startTime)}
+            >
+              <Text style={styles.chapterTime}>{formatTime(chapter.startTime)}</Text>
+              <Text
+                style={[styles.chapterTitle, i === currentChapterIndex && styles.chapterTitleActive]}
+                numberOfLines={1}
+              >
+                {chapter.title}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      </View>
+    ) : null
 
   // Up next in the queue, current episode excluded — it stays playing at
   // the top of the actual Queue tab, but repeating it here would read as
@@ -145,6 +210,7 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
       <View style={styles.barTouchArea} onLayout={onBarLayout} {...panHandlers}>
         <View style={styles.bar}>
           <View style={[styles.barFill, { width: `${progress * 100}%` }]} />
+          {chapterTicks}
         </View>
         <View style={[styles.thumb, { left: `${progress * 100}%` }, scrubbing && styles.thumbActive]} />
       </View>
@@ -191,6 +257,7 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
             {scrubber}
             {controls}
             {speedPill}
+            {mode === 'rail' && chaptersSection}
             {mode === 'rail' && description.length > 0 && (
               <View style={styles.descriptionSection}>
                 <Text style={styles.sectionTitle}>Episode Description</Text>
@@ -229,6 +296,7 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
                   })}
                 </View>
               )}
+              {chaptersSection}
               {description.length > 0 && (
                 <View style={styles.rightSection}>
                   <Text style={styles.sectionTitle}>Episode Description</Text>
@@ -265,6 +333,8 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
       {controls}
       {speedPill}
 
+      {chaptersSection}
+
       {description.length > 0 && (
         <View style={styles.descriptionSection}>
           <Text style={styles.sectionTitle}>Episode Description</Text>
@@ -295,6 +365,19 @@ const styles = StyleSheet.create({
     overflow: 'hidden'
   },
   barFill: { height: '100%', backgroundColor: colors.accent },
+  chapterTicks: { ...StyleSheet.absoluteFillObject },
+  chapterTick: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: 2,
+    backgroundColor: 'rgba(255,255,255,0.6)'
+  },
+  chapterList: { gap: 2 },
+  chapterRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  chapterTime: { fontSize: 12, color: colors.textMuted, width: 48 },
+  chapterTitle: { flex: 1, fontSize: 13, color: colors.textSecondary },
+  chapterTitleActive: { color: colors.accent, fontWeight: '700' },
   thumb: {
     position: 'absolute',
     width: 16,

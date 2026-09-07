@@ -93,7 +93,7 @@ export async function parseFeed(feedUrl: string, podcastId: string, authHeader?:
           durationSec: parseItunesDuration(item['itunes:duration']),
           pubDateIso: item.pubDate ? new Date(text(item.pubDate)).toISOString() : new Date(0).toISOString(),
           played: false,
-          chaptersUrl: null
+          chaptersUrl: attr(item['podcast:chapters'], 'url') ?? null
         }
         return episode
       })
