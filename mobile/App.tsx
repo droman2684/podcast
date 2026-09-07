@@ -44,6 +44,7 @@ export default function App(): React.JSX.Element {
   const loadCachedPositions = useStore((s) => s.loadCachedPositions)
   const loadCachedQueue = useStore((s) => s.loadCachedQueue)
   const loadCachedArtwork = useStore((s) => s.loadCachedArtwork)
+  const loadCachedPodcastVolume = useStore((s) => s.loadCachedPodcastVolume)
   const loadCachedDownloadedSnapshots = useStore((s) => s.loadCachedDownloadedSnapshots)
   const loadDownloads = useStore((s) => s.loadDownloads)
   const podcasts = useStore((s) => s.podcasts)
@@ -86,6 +87,7 @@ export default function App(): React.JSX.Element {
     loadCachedPositions()
     loadCachedQueue()
     loadCachedArtwork()
+    loadCachedPodcastVolume()
     // Seeds podcasts/episodesByPodcast for downloaded episodes before
     // loadLibrary's network fetch has a chance to run, so Downloads (the
     // default landing tab) doesn't sit empty for however long that takes —
@@ -98,6 +100,7 @@ export default function App(): React.JSX.Element {
     loadCachedPositions,
     loadCachedQueue,
     loadCachedArtwork,
+    loadCachedPodcastVolume,
     loadCachedDownloadedSnapshots,
     loadDownloads
   ])

@@ -224,6 +224,30 @@ async function saveLocalArtwork(overrides: Record<string, string | null>): Promi
   }
 }
 
+// Per-podcast playback volume (0-1), device-local only — not everything
+// worth remembering is worth syncing (see LocalSettings above). This just
+// lets a consistently loud show be turned down once and stay down, rather
+// than reaching for the volume rocker every time it comes on.
+const PODCAST_VOLUME_STORAGE_KEY = 'empirepod.podcastVolume.v1'
+
+async function loadLocalPodcastVolume(): Promise<Record<string, number>> {
+  try {
+    const raw = await AsyncStorage.getItem(PODCAST_VOLUME_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, number>) : {}
+  } catch (err) {
+    console.error('[podcastVolume] local load failed:', err)
+    return {}
+  }
+}
+
+async function saveLocalPodcastVolume(volumes: Record<string, number>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(PODCAST_VOLUME_STORAGE_KEY, JSON.stringify(volumes))
+  } catch (err) {
+    console.error('[podcastVolume] local save failed:', err)
+  }
+}
+
 async function loadLastSeenMap(): Promise<Record<string, string>> {
   try {
     const raw = await AsyncStorage.getItem(LAST_SEEN_STORAGE_KEY)
@@ -327,6 +351,8 @@ interface AppState {
   customArtworkOverrides: Record<string, string | null>
   episodesByPodcast: Record<string, Episode[]>
   positions: Record<string, number>
+  // Device-local per-podcast volume (0-1); missing entry means "full volume." See PODCAST_VOLUME_STORAGE_KEY.
+  podcastVolume: Record<string, number>
   podcastSettings: Record<string, PodcastSettings>
   queue: string[]
   libraryLoading: boolean
@@ -355,6 +381,7 @@ interface AppState {
   unsubscribe: (podcastId: string) => Promise<void>
   setNotify: (podcastId: string, notify: boolean) => Promise<void>
   setPodcastArtwork: (podcastId: string, dataUrl: string | null) => Promise<void>
+  setPodcastVolume: (podcastId: string, volume: number) => Promise<void>
 
   // Live cross-device sync for the three tables that were previously
   // poll-only (loadLibrary on open, refreshPositions on foreground) — a
@@ -384,6 +411,8 @@ interface AppState {
   // Same idea, for custom artwork overrides — see ARTWORK_STORAGE_KEY's doc
   // comment.
   loadCachedArtwork: () => Promise<void>
+  // Same idea, for per-podcast volume — see PODCAST_VOLUME_STORAGE_KEY's doc comment.
+  loadCachedPodcastVolume: () => Promise<void>
   // Seeds `podcasts`/`episodesByPodcast` with just enough data to render
   // already-downloaded episodes before loadLibrary's network fetch lands —
   // see DOWNLOADED_SNAPSHOT_STORAGE_KEY's doc comment.
@@ -608,6 +637,7 @@ export const useStore = create<AppState>((set, get) => {
 
   podcasts: [],
   customArtworkOverrides: {},
+  podcastVolume: {},
   episodesByPodcast: {},
   positions: {},
   podcastSettings: {},
@@ -646,6 +676,11 @@ export const useStore = create<AppState>((set, get) => {
   loadCachedArtwork: async () => {
     const cached = await loadLocalArtwork()
     set({ customArtworkOverrides: cached })
+  },
+
+  loadCachedPodcastVolume: async () => {
+    const cached = await loadLocalPodcastVolume()
+    set({ podcastVolume: cached })
   },
 
   // Only ever sets, never merges into, `podcasts`/`episodesByPodcast` — this
@@ -1335,6 +1370,16 @@ export const useStore = create<AppState>((set, get) => {
       id: podcastId,
       custom_artwork_url: dataUrl
     })
+  },
+
+  // Device-local only (see PODCAST_VOLUME_STORAGE_KEY) — no outbox/ledger
+  // write, unlike setNotify/setPodcastArtwork above, since this never needs
+  // to sync across devices.
+  setPodcastVolume: async (podcastId, volume) => {
+    const clamped = Math.min(1, Math.max(0, volume))
+    const volumes = { ...get().podcastVolume, [podcastId]: clamped }
+    set({ podcastVolume: volumes })
+    await saveLocalPodcastVolume(volumes)
   },
 
   // Wires one Realtime channel per syncable table via the shared engine

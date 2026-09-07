@@ -19,6 +19,7 @@ export default function AudioEngine(): null {
   const seekRequestSec = useStore((s) => s.seekRequestSec)
   const playbackRate = useStore((s) => s.playbackRate)
   const positions = useStore((s) => s.positions)
+  const podcastVolume = useStore((s) => s.podcastVolume)
   const downloadedUris = useStore((s) => s.downloadedUris)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const podcasts = useStore((s) => s.podcasts)
@@ -157,6 +158,10 @@ export default function AudioEngine(): null {
   useEffect(() => {
     player.setPlaybackRate(playbackRate)
   }, [playbackRate, episode?.id, player])
+
+  useEffect(() => {
+    player.volume = podcast ? (podcastVolume[podcast.id] ?? 1) : 1
+  }, [podcast, podcastVolume, episode?.id, player])
 
   // Saves the seek target directly rather than waiting for the next
   // periodic tick (up to SAVE_INTERVAL_MS later) or for currentTimeRef to

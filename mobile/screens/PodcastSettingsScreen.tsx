@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import { View, Text, Pressable, Switch, Alert, StyleSheet, ActivityIndicator } from 'react-native'
-import { Camera } from 'lucide-react-native'
+import { Camera, Minus, Plus } from 'lucide-react-native'
 import type { Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import { pickPodcastArtwork } from '../lib/podcastArtwork'
 import { colors, radii, cardShadow } from '../theme'
+
+const VOLUME_STEP = 0.05
+const VOLUME_MIN = 0.2
 
 interface Props {
   podcast: Podcast
@@ -16,6 +19,8 @@ interface Props {
 export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed }: Props): React.JSX.Element {
   const notify = useStore((s) => s.podcastSettings[podcast.id]?.notify ?? false)
   const setNotify = useStore((s) => s.setNotify)
+  const volume = useStore((s) => s.podcastVolume[podcast.id] ?? 1)
+  const setPodcastVolume = useStore((s) => s.setPodcastVolume)
   const unsubscribe = useStore((s) => s.unsubscribe)
   const markAllPlayed = useStore((s) => s.markAllPlayed)
   const setPodcastArtwork = useStore((s) => s.setPodcastArtwork)
@@ -68,6 +73,11 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
+  }
+
+  const handleVolumeStep = (delta: number): void => {
+    const next = Math.min(1, Math.max(VOLUME_MIN, Math.round((volume + delta) * 100) / 100))
+    setPodcastVolume(podcast.id, next)
   }
 
   const handleChangeArtwork = async (): Promise<void> => {
@@ -133,6 +143,34 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
             onValueChange={handleNotifyToggle}
             accessibilityLabel="Notify on new episodes"
           />
+        </View>
+      </View>
+
+      <Text style={styles.sectionTitle}>Volume</Text>
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <Text style={styles.rowLabel}>Playback volume for this show</Text>
+          <View style={styles.volumeControl}>
+            <Pressable
+              hitSlop={8}
+              style={styles.volumeBtn}
+              onPress={() => handleVolumeStep(-VOLUME_STEP)}
+              disabled={volume <= VOLUME_MIN}
+              accessibilityLabel="Decrease volume"
+            >
+              <Minus size={14} color={volume <= VOLUME_MIN ? colors.textDisabled : colors.textSecondary} />
+            </Pressable>
+            <Text style={styles.volumeText}>{Math.round(volume * 100)}%</Text>
+            <Pressable
+              hitSlop={8}
+              style={styles.volumeBtn}
+              onPress={() => handleVolumeStep(VOLUME_STEP)}
+              disabled={volume >= 1}
+              accessibilityLabel="Increase volume"
+            >
+              <Plus size={14} color={volume >= 1 ? colors.textDisabled : colors.textSecondary} />
+            </Pressable>
+          </View>
         </View>
       </View>
 
@@ -219,6 +257,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14
   },
   rowLabel: { fontSize: 14, fontWeight: '500', color: colors.textPrimary },
+  volumeControl: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  volumeBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#e8e8ed',
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  volumeText: { fontSize: 13, fontWeight: '600', color: colors.textSecondary, width: 38, textAlign: 'center' },
   actionRow: { paddingVertical: 14, paddingHorizontal: 14 },
   actionText: { fontSize: 14, fontWeight: '500', color: colors.textPrimary },
   dangerRow: {

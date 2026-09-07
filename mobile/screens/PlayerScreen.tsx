@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { ChevronDown, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward } from 'lucide-react-native'
 import type { Chapter, Episode, Podcast } from '@shared/types'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
@@ -157,23 +158,46 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
   const canGoPrevious = previousInQueue(queue, episode.id) !== null
   const canGoNext = nextInQueue(queue, episode.id) !== null
 
+  // Light impact for the small, frequent taps (skip/prev/next); a slightly
+  // heavier one for play/pause since it's the single most-pressed control
+  // and benefits from feeling more "committed."
+  const tapLight = (): void => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {})
+  }
+  const tapMedium = (): void => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {})
+  }
+
   const controls = (
     <View style={isTablet ? styles.controlsTablet : styles.controls}>
       <Pressable
         hitSlop={8}
         disabled={!canGoPrevious}
-        onPress={playPreviousInQueue}
+        onPress={() => {
+          tapLight()
+          playPreviousInQueue()
+        }}
         accessibilityLabel="Previous in queue"
       >
         <SkipBack size={20} color={canGoPrevious ? colors.textSecondary : colors.textDisabled} />
       </Pressable>
-      <Pressable hitSlop={8} style={styles.skipBtn} onPress={() => requestSeek(Math.max(0, currentTimeSec - skipBackSec))}>
+      <Pressable
+        hitSlop={8}
+        style={styles.skipBtn}
+        onPress={() => {
+          tapLight()
+          requestSeek(Math.max(0, currentTimeSec - skipBackSec))
+        }}
+      >
         <RotateCcw size={24} color={colors.textSecondary} />
         <Text style={styles.skipLabel}>{skipBackSec}</Text>
       </Pressable>
       <Pressable
         style={[styles.playButton, isTablet && styles.playButtonTablet]}
-        onPress={togglePlay}
+        onPress={() => {
+          tapMedium()
+          togglePlay()
+        }}
         accessibilityLabel={playing ? 'Pause' : 'Play'}
       >
         {playing ? (
@@ -185,12 +209,23 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
       <Pressable
         hitSlop={8}
         style={styles.skipBtn}
-        onPress={() => requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))}
+        onPress={() => {
+          tapLight()
+          requestSeek(Math.min(duration, currentTimeSec + skipForwardSec))
+        }}
       >
         <RotateCw size={24} color={colors.textSecondary} />
         <Text style={styles.skipLabel}>{skipForwardSec}</Text>
       </Pressable>
-      <Pressable hitSlop={8} disabled={!canGoNext} onPress={playNextInQueue} accessibilityLabel="Next in queue">
+      <Pressable
+        hitSlop={8}
+        disabled={!canGoNext}
+        onPress={() => {
+          tapLight()
+          playNextInQueue()
+        }}
+        accessibilityLabel="Next in queue"
+      >
         <SkipForward size={20} color={canGoNext ? colors.textSecondary : colors.textDisabled} />
       </Pressable>
     </View>

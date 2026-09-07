@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { View, Text, FlatList, Pressable, StyleSheet } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { Settings, ChevronDown, ChevronUp, Download, Trash2, ListPlus, Check, RotateCcw } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
@@ -241,7 +242,10 @@ export default function EpisodeListScreen({
             downloading={Boolean(downloadingIds[item.id])}
             downloadProgress={downloadProgress[item.id] ?? 0}
             onPlay={() => onPlay(item.id)}
-            onToggleQueue={() => (queue.includes(item.id) ? removeFromQueue(item.id) : addToQueue(item.id))}
+            onToggleQueue={() => {
+              Haptics.selectionAsync().catch(() => {})
+              queue.includes(item.id) ? removeFromQueue(item.id) : addToQueue(item.id)
+            }}
             onTogglePlayed={() => setPlayed(item.id, podcast.id, !item.played)}
             onToggleDownload={() =>
               downloadedUris[item.id] ? removeDownload(item.id) : downloadEpisode(item)
