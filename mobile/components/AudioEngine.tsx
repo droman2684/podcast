@@ -27,6 +27,7 @@ export default function AudioEngine(): null {
   const fetchLatestPosition = useStore((s) => s.fetchLatestPosition)
   const setPlayed = useStore((s) => s.setPlayed)
   const removeFromQueue = useStore((s) => s.removeFromQueue)
+  const removeDownload = useStore((s) => s.removeDownload)
   const clearSeekRequest = useStore((s) => s.clearSeekRequest)
   const setPlaybackTime = useStore((s) => s.setPlaybackTime)
   const loadEpisode = useStore((s) => s.loadEpisode)
@@ -235,8 +236,12 @@ export default function AudioEngine(): null {
     savePosition(episode.id, 0)
     setPlayed(episode.id, episode.podcastId, true)
     const nextId = removeFromQueueOnFinish(queue, episode.id, removeFromQueue)
+    // Default-on: a downloaded episode's local file is only useful until
+    // it's been listened to, so free the space automatically once it's done
+    // rather than leaving finished downloads sitting on disk indefinitely.
+    if (downloadedUris[episode.id]) removeDownload(episode.id)
     if (nextId) loadEpisode(nextId, { autoplay: true })
-  }, [status.didJustFinish, episode, queue, savePosition, setPlayed, removeFromQueue, loadEpisode])
+  }, [status.didJustFinish, episode, queue, downloadedUris, savePosition, setPlayed, removeFromQueue, removeDownload, loadEpisode])
 
   // Backgrounding is the closest mobile equivalent of Electron's
   // before-quit (src/main/index.ts in the desktop app): it's the last
