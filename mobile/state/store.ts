@@ -115,6 +115,34 @@ async function saveLocalQueue(queue: string[]): Promise<void> {
   }
 }
 
+// Local durable cache of played-state, mirroring the artwork/queue caches
+// above — setPlayed's outbox write can lose a race with the app closing (or
+// just not have drained yet), and loadLibrary's ledger gate then correctly
+// rejects a stale/missing server row but falls back to the in-memory
+// episodesByPodcast, which on a cold start is always the freshly-initialized
+// `{}`. Without this cache, marking an episode played right before
+// backgrounding/killing the app quietly reverted to unplayed on next launch
+// even though the edit was never lost — it just hadn't round-tripped yet.
+const PLAYED_STORAGE_KEY = 'empirepod.played.v1'
+
+async function loadLocalPlayed(): Promise<Record<string, boolean>> {
+  try {
+    const raw = await AsyncStorage.getItem(PLAYED_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Record<string, boolean>) : {}
+  } catch (err) {
+    console.error('[played] local load failed:', err)
+    return {}
+  }
+}
+
+async function saveLocalPlayed(played: Record<string, boolean>): Promise<void> {
+  try {
+    await AsyncStorage.setItem(PLAYED_STORAGE_KEY, JSON.stringify(played))
+  } catch (err) {
+    console.error('[played] local save failed:', err)
+  }
+}
+
 // Manual sort order for the Downloads screen. Downloads are device-local
 // only (see downloadedUris' doc comment), so unlike the queue this has no
 // server-synced counterpart — just this local cache.
@@ -349,6 +377,11 @@ interface AppState {
   // fallback when a pull is rejected by the ledger; `podcasts[].customArtworkUrl`
   // stays the source of truth for rendering.
   customArtworkOverrides: Record<string, string | null>
+  // Device-local durable fallback for played-state — see PLAYED_STORAGE_KEY's
+  // doc comment. Consulted only as loadLibrary's fallback when a pull is
+  // rejected by the ledger and there's nothing in in-memory state yet (cold
+  // start); `episodesByPodcast[].played` stays the source of truth otherwise.
+  localPlayed: Record<string, boolean>
   episodesByPodcast: Record<string, Episode[]>
   positions: Record<string, number>
   // Device-local per-podcast volume (0-1); missing entry means "full volume." See PODCAST_VOLUME_STORAGE_KEY.
@@ -413,6 +446,8 @@ interface AppState {
   loadCachedArtwork: () => Promise<void>
   // Same idea, for per-podcast volume — see PODCAST_VOLUME_STORAGE_KEY's doc comment.
   loadCachedPodcastVolume: () => Promise<void>
+  // Same idea, for played-state — see PLAYED_STORAGE_KEY's doc comment.
+  loadCachedPlayed: () => Promise<void>
   // Seeds `podcasts`/`episodesByPodcast` with just enough data to render
   // already-downloaded episodes before loadLibrary's network fetch lands —
   // see DOWNLOADED_SNAPSHOT_STORAGE_KEY's doc comment.
@@ -637,6 +672,7 @@ export const useStore = create<AppState>((set, get) => {
 
   podcasts: [],
   customArtworkOverrides: {},
+  localPlayed: {},
   podcastVolume: {},
   episodesByPodcast: {},
   positions: {},
@@ -676,6 +712,11 @@ export const useStore = create<AppState>((set, get) => {
   loadCachedArtwork: async () => {
     const cached = await loadLocalArtwork()
     set({ customArtworkOverrides: cached })
+  },
+
+  loadCachedPlayed: async () => {
+    const cached = await loadLocalPlayed()
+    set({ localPlayed: cached })
   },
 
   loadCachedPodcastVolume: async () => {
@@ -981,6 +1022,12 @@ export const useStore = create<AppState>((set, get) => {
       // already-established mark count as new.
       const lastSeen = await loadLastSeenMap()
       const newEpisodes: Episode[] = []
+      // Subset of newEpisodes actually eligible for auto-download — only
+      // private-feed shows, since those are the ones that can disappear from
+      // their origin server or get taken down without warning; regular
+      // public feeds stay re-fetchable from the CDN indefinitely, so
+      // auto-downloading every new episode there just burns device storage.
+      const newEpisodesToDownload: Episode[] = []
       // Podcast ids whose high-water mark advances past what's currently
       // synced to podcast_settings.last_seen_pub_date — pushed once after
       // the loop so every other device shares the advance instead of each
@@ -1042,12 +1089,16 @@ export const useStore = create<AppState>((set, get) => {
             const parsed = await parseFeed(row.feed_url, row.id, authHeader)
             // Same gate as positions/queue above: only take the server's
             // played value if it's newer than what this device already
-            // recorded, otherwise keep this device's own in-memory value
-            // (an optimistic setPlayed that hasn't finished uploading
-            // shouldn't get reverted by this reload).
+            // recorded, otherwise keep this device's own value (an optimistic
+            // setPlayed that hasn't finished uploading shouldn't get reverted
+            // by this reload). In-memory episodesByPodcast is always empty on
+            // a cold start though, so it falls back further to the durable
+            // localPlayed cache (see PLAYED_STORAGE_KEY's doc comment) before
+            // finally giving up and treating the episode as unplayed.
             const previousPlayedById = new Map(
               (get().episodesByPodcast[row.id] ?? []).map((e) => [e.id, e.played])
             )
+            const localPlayed = get().localPlayed
             const episodes = parsed.episodes.map((e) => {
               const playedRow = playedRowByEpisode.get(e.id)
               const key = `episodePlayed:${e.id}`
@@ -1055,7 +1106,10 @@ export const useStore = create<AppState>((set, get) => {
                 ledger.touch(key, new Date(playedRow.updated_at).getTime())
                 return { ...e, played: playedRow.played }
               }
-              return { ...e, played: previousPlayedById.get(e.id) ?? playedRow?.played ?? false }
+              return {
+                ...e,
+                played: previousPlayedById.get(e.id) ?? localPlayed[e.id] ?? playedRow?.played ?? false
+              }
             })
             const podcast: Podcast = {
               id: row.id,
@@ -1079,7 +1133,10 @@ export const useStore = create<AppState>((set, get) => {
             const priorMark = maxIsoDate(lastSeen[row.id], remoteLastSeen[row.id])
             if (priorMark) {
               for (const e of episodes) {
-                if (!e.played && e.pubDateIso > priorMark) newEpisodes.push(e)
+                if (!e.played && e.pubDateIso > priorMark) {
+                  newEpisodes.push(e)
+                  if (row.is_private) newEpisodesToDownload.push(e)
+                }
               }
             }
             const newestPubDate = episodes.reduce((max, e) => (e.pubDateIso > max ? e.pubDateIso : max), '')
@@ -1140,15 +1197,18 @@ export const useStore = create<AppState>((set, get) => {
           console.log(`[loadLibrary] auto-queued ${toAdd.length} new episode(s)`)
         }
 
-        // Auto-download every genuinely new episode so it's ready offline by
-        // the time the user gets to it, same "new since last seen" set used
-        // for auto-queueing above. Not awaited — loadLibrary shouldn't sit
-        // blocked on however long a batch of downloads takes, and each
-        // download's own state (downloadingIds/downloadProgress) already
-        // renders fine while the rest of the app carries on.
-        void mapWithConcurrency(newEpisodes, 2, (e) => get().downloadEpisode(e)).then(() => {
-          console.log(`[loadLibrary] auto-downloaded ${newEpisodes.length} new episode(s)`)
-        })
+        // Auto-download every genuinely new episode from a private feed so
+        // it's ready offline by the time the user gets to it — see
+        // newEpisodesToDownload's doc comment for why public-feed episodes
+        // are excluded. Not awaited — loadLibrary shouldn't sit blocked on
+        // however long a batch of downloads takes, and each download's own
+        // state (downloadingIds/downloadProgress) already renders fine while
+        // the rest of the app carries on.
+        if (newEpisodesToDownload.length > 0) {
+          void mapWithConcurrency(newEpisodesToDownload, 2, (e) => get().downloadEpisode(e)).then(() => {
+            console.log(`[loadLibrary] auto-downloaded ${newEpisodesToDownload.length} new private episode(s)`)
+          })
+        }
       }
 
       // Final sweep to drop any podcast that's no longer subscribed (e.g.
@@ -1447,11 +1507,14 @@ export const useStore = create<AppState>((set, get) => {
           if (!episodes || idx === -1) return {}
           const updated = [...episodes]
           updated[idx] = { ...updated[idx], played: row.played }
+          const localPlayed = { ...state.localPlayed, [row.episode_id]: row.played }
+          saveLocalPlayed(localPlayed).catch(() => {})
           return {
             episodesByPodcast: { ...state.episodesByPodcast, [row.podcast_id]: updated },
             podcasts: state.podcasts.map((p) =>
               p.id === row.podcast_id ? { ...p, unread: updated.filter((e) => !e.played).length } : p
-            )
+            ),
+            localPlayed
           }
         })
       },
@@ -1601,11 +1664,14 @@ export const useStore = create<AppState>((set, get) => {
       const episodes = (state.episodesByPodcast[podcastId] ?? []).map((e) =>
         e.id === episodeId ? { ...e, played } : e
       )
+      const localPlayed = { ...state.localPlayed, [episodeId]: played }
+      saveLocalPlayed(localPlayed).catch(() => {})
       return {
         episodesByPodcast: { ...state.episodesByPodcast, [podcastId]: episodes },
         podcasts: state.podcasts.map((p) =>
           p.id === podcastId ? { ...p, unread: episodes.filter((e) => !e.played).length } : p
-        )
+        ),
+        localPlayed
       }
     })
     // Stamped now, before the network call — protects this edit from being
@@ -1662,9 +1728,13 @@ export const useStore = create<AppState>((set, get) => {
 
     set((state) => {
       const updated = (state.episodesByPodcast[podcastId] ?? []).map((e) => ({ ...e, played: true }))
+      const localPlayed = { ...state.localPlayed }
+      for (const e of unplayed) localPlayed[e.id] = true
+      saveLocalPlayed(localPlayed).catch(() => {})
       return {
         episodesByPodcast: { ...state.episodesByPodcast, [podcastId]: updated },
-        podcasts: state.podcasts.map((p) => (p.id === podcastId ? { ...p, unread: 0 } : p))
+        podcasts: state.podcasts.map((p) => (p.id === podcastId ? { ...p, unread: 0 } : p)),
+        localPlayed
       }
     })
   },
