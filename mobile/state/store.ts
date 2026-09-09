@@ -25,6 +25,7 @@ import { createMobileAdapters } from '../lib/syncAdapters'
 import { parseFeed } from '../lib/rss'
 import { downloadEpisode as downloadEpisodeFile, deleteDownload, listDownloadedUris } from '../lib/downloads'
 import { hashId } from '../lib/hash'
+import { DEFAULT_DISCOVER_CATEGORIES } from '../lib/itunes'
 import {
   getPrivateFeedCredential,
   savePrivateFeedCredential,
@@ -45,13 +46,15 @@ interface LocalSettings {
   skipForwardSec: number
   defaultLibraryView: LibraryView
   queueGroupedByShow: boolean
+  discoverCategories: string[]
 }
 
 const DEFAULT_SETTINGS: LocalSettings = {
   skipBackSec: 15,
   skipForwardSec: 30,
   defaultLibraryView: 'grid',
-  queueGroupedByShow: false
+  queueGroupedByShow: false,
+  discoverCategories: DEFAULT_DISCOVER_CATEGORIES
 }
 
 async function saveSettings(settings: LocalSettings): Promise<void> {
@@ -202,6 +205,35 @@ async function saveLocalDownloadedSnapshots(snapshots: Record<string, Downloaded
     await AsyncStorage.setItem(DOWNLOADED_SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshots))
   } catch (err) {
     console.error('[downloads] snapshot save failed:', err)
+  }
+}
+
+// Local durable cache of user Categories/Stations, mirroring the queue/
+// positions caches above — upsertStation's outbox write can lose a race with
+// the app closing (or just not have drained yet), and loadStations' pull
+// then correctly finds nothing server-side for it yet, but the merge's
+// fallback for anything not (yet) returned by the pull was `get().stations`,
+// which on a cold app start is always the freshly-initialized `[]`. Without
+// this cache, a category created (or a show assigned to one) right before
+// backgrounding/closing the app quietly reverted to gone on next launch even
+// though the edit was never lost — it just hadn't round-tripped yet.
+const STATIONS_STORAGE_KEY = 'empirepod.stations.v1'
+
+async function loadLocalStations(): Promise<Station[]> {
+  try {
+    const raw = await AsyncStorage.getItem(STATIONS_STORAGE_KEY)
+    return raw ? (JSON.parse(raw) as Station[]) : []
+  } catch (err) {
+    console.error('[stations] local load failed:', err)
+    return []
+  }
+}
+
+async function saveLocalStations(stations: Station[]): Promise<void> {
+  try {
+    await AsyncStorage.setItem(STATIONS_STORAGE_KEY, JSON.stringify(stations))
+  } catch (err) {
+    console.error('[stations] local save failed:', err)
   }
 }
 
@@ -396,12 +428,18 @@ interface AppState {
   skipForwardSec: number
   defaultLibraryView: LibraryView
   queueGroupedByShow: boolean
+  // The Discover tab's category chips — device-local like the rest of
+  // LocalSettings, editable from Settings (add from CATEGORY_GENRE_IDS,
+  // remove down to a minimum of one so Discover never has zero chips).
+  discoverCategories: string[]
   settingsLoaded: boolean
   loadSettings: () => Promise<void>
   setSkipBackSec: (sec: number) => void
   setSkipForwardSec: (sec: number) => void
   setDefaultLibraryView: (view: LibraryView) => void
   setQueueGroupedByShow: (grouped: boolean) => void
+  addDiscoverCategory: (category: string) => void
+  removeDiscoverCategory: (category: string) => void
 
   initAuth: () => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
@@ -441,6 +479,12 @@ interface AppState {
   // start falls back to the last real queue instead of the empty initial
   // state. See QUEUE_STORAGE_KEY's doc comment.
   loadCachedQueue: () => Promise<void>
+  // Same idea, for user Categories/Stations — hydrates `stations` from this
+  // device's local cache before loadStations' network pull lands, so a
+  // just-created category/assignment that hasn't reached the server yet
+  // survives a cold start instead of reverting to gone. See
+  // STATIONS_STORAGE_KEY's doc comment.
+  loadCachedStations: () => Promise<void>
   // Same idea, for custom artwork overrides — see ARTWORK_STORAGE_KEY's doc
   // comment.
   loadCachedArtwork: () => Promise<void>
@@ -499,7 +543,6 @@ interface AppState {
   // own removeFromQueueOnFinish for the "finished playing" case; this is the
   // "deleted the download" case.
   removeDownload: (episodeId: string) => void
-  reorderDownloads: (episodeIds: string[]) => Promise<void>
 
   // "Categories" in the mobile UI — backed by the same `stations` table
   // desktop uses for its Stations feature, reusing that data model as-is
@@ -643,8 +686,12 @@ export const useStore = create<AppState>((set, get) => {
   const applyRemotePodcastTombstone = (podcastId: string): void => {
     const removedEpisodeIds = new Set((get().episodesByPodcast[podcastId] ?? []).map((e) => e.id))
     let nextQueue: string[] | null = null
+    let nextStations: Station[] | null = null
     set((state) => {
       nextQueue = state.queue.filter((id) => !removedEpisodeIds.has(id))
+      nextStations = state.stations.map((s) =>
+        s.podcastIds.includes(podcastId) ? { ...s, podcastIds: s.podcastIds.filter((id) => id !== podcastId) } : s
+      )
       const { [podcastId]: _removedFeed, ...restPrivateFeeds } = state.privateFeeds
       const { [podcastId]: _removedMissing, ...restMissing } = state.privateFeedsMissingCredential
       return {
@@ -653,14 +700,13 @@ export const useStore = create<AppState>((set, get) => {
           Object.entries(state.episodesByPodcast).filter(([id]) => id !== podcastId)
         ),
         queue: nextQueue,
-        stations: state.stations.map((s) =>
-          s.podcastIds.includes(podcastId) ? { ...s, podcastIds: s.podcastIds.filter((id) => id !== podcastId) } : s
-        ),
+        stations: nextStations,
         privateFeeds: restPrivateFeeds,
         privateFeedsMissingCredential: restMissing
       }
     })
     if (nextQueue) saveLocalQueue(nextQueue).catch(() => {})
+    if (nextStations) saveLocalStations(nextStations).catch(() => {})
   }
 
   return {
@@ -697,6 +743,7 @@ export const useStore = create<AppState>((set, get) => {
   skipForwardSec: DEFAULT_SETTINGS.skipForwardSec,
   defaultLibraryView: DEFAULT_SETTINGS.defaultLibraryView,
   queueGroupedByShow: DEFAULT_SETTINGS.queueGroupedByShow,
+  discoverCategories: DEFAULT_SETTINGS.discoverCategories,
   settingsLoaded: false,
 
   loadCachedPositions: async () => {
@@ -707,6 +754,11 @@ export const useStore = create<AppState>((set, get) => {
   loadCachedQueue: async () => {
     const cached = await loadLocalQueue()
     set({ queue: cached })
+  },
+
+  loadCachedStations: async () => {
+    const cached = await loadLocalStations()
+    set({ stations: cached })
   },
 
   loadCachedArtwork: async () => {
@@ -751,6 +803,10 @@ export const useStore = create<AppState>((set, get) => {
         skipForwardSec: saved.skipForwardSec ?? DEFAULT_SETTINGS.skipForwardSec,
         defaultLibraryView: saved.defaultLibraryView ?? DEFAULT_SETTINGS.defaultLibraryView,
         queueGroupedByShow: saved.queueGroupedByShow ?? DEFAULT_SETTINGS.queueGroupedByShow,
+        discoverCategories:
+          saved.discoverCategories && saved.discoverCategories.length > 0
+            ? saved.discoverCategories
+            : DEFAULT_SETTINGS.discoverCategories,
         settingsLoaded: true
       })
     } catch (err) {
@@ -761,26 +817,44 @@ export const useStore = create<AppState>((set, get) => {
 
   setSkipBackSec: (sec) => {
     set({ skipBackSec: sec })
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow })
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
   },
 
   setSkipForwardSec: (sec) => {
     set({ skipForwardSec: sec })
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow })
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
   },
 
   setDefaultLibraryView: (view) => {
     set({ defaultLibraryView: view })
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow })
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
   },
 
   setQueueGroupedByShow: (grouped) => {
     set({ queueGroupedByShow: grouped })
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow })
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
+  },
+
+  // Adds to the end, ignoring a name already present (Settings' picker
+  // already excludes those, this just guards direct calls).
+  addDiscoverCategory: (category) => {
+    if (get().discoverCategories.includes(category)) return
+    set((state) => ({ discoverCategories: [...state.discoverCategories, category] }))
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
+  },
+
+  // Never drops below one category — Discover's chip row always needs at
+  // least one to show and pick a default selection from.
+  removeDiscoverCategory: (category) => {
+    if (get().discoverCategories.length <= 1) return
+    set((state) => ({ discoverCategories: state.discoverCategories.filter((c) => c !== category) }))
+    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
+    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
   },
 
   currentEpisodeId: null,
@@ -1484,9 +1558,11 @@ export const useStore = create<AppState>((set, get) => {
         set((state) => ({
           stations: [...state.stations.filter((s) => s.id !== station.id), station]
         }))
+        saveLocalStations(get().stations).catch(() => {})
       },
       onStationTombstone: (row) => {
         set((state) => ({ stations: state.stations.filter((s) => s.id !== row.id) }))
+        saveLocalStations(get().stations).catch(() => {})
       },
       onQueueRow: (row) => {
         const next = Array.isArray(row.episode_ids) ? row.episode_ids : []
@@ -1863,11 +1939,6 @@ export const useStore = create<AppState>((set, get) => {
     })
   },
 
-  reorderDownloads: async (episodeIds) => {
-    set({ downloadOrder: episodeIds })
-    await saveLocalDownloadOrder(episodeIds)
-  },
-
   loadStations: async () => {
     const ledger = getLedger()
     await ledger.ensureLoaded()
@@ -1893,7 +1964,9 @@ export const useStore = create<AppState>((set, get) => {
         }
       })
       await enginePullAndMerge(client, ledger, userId, descriptors, markerFromUpdatedAt)
-      set({ stations: Array.from(stationsById.values()), stationsLoaded: true })
+      const nextStations = Array.from(stationsById.values())
+      set({ stations: nextStations, stationsLoaded: true })
+      saveLocalStations(nextStations).catch(() => {})
     } catch (err) {
       console.error('[stations] load failed:', err)
       set({ stationsLoaded: true })
@@ -1910,6 +1983,7 @@ export const useStore = create<AppState>((set, get) => {
     const id = await hashId(`${name}-${Date.now()}-${Math.random()}`)
     const station: Station = { id, name, podcastIds: [], sortBy: 'newest', episodesPerShow: 5 }
     set((state) => ({ stations: [...state.stations, station] }))
+    saveLocalStations(get().stations).catch(() => {})
     await upsertStation(userId, station)
     return station
   },
@@ -1921,6 +1995,7 @@ export const useStore = create<AppState>((set, get) => {
     if (!station) return
     const updated: Station = { ...station, name }
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
+    saveLocalStations(get().stations).catch(() => {})
     await upsertStation(userId, updated)
   },
 
@@ -1928,6 +2003,7 @@ export const useStore = create<AppState>((set, get) => {
     const userId = await currentUserId()
     if (!userId) return
     set((state) => ({ stations: state.stations.filter((s) => s.id !== stationId) }))
+    saveLocalStations(get().stations).catch(() => {})
     const ledger = getLedger()
     await ledger.ensureLoaded()
     ledger.touch(`station:${stationId}`)
@@ -1945,6 +2021,7 @@ export const useStore = create<AppState>((set, get) => {
     if (!station || station.podcastIds.includes(podcastId)) return
     const updated: Station = { ...station, podcastIds: [...station.podcastIds, podcastId] }
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
+    saveLocalStations(get().stations).catch(() => {})
     await upsertStation(userId, updated)
   },
 
@@ -1955,6 +2032,7 @@ export const useStore = create<AppState>((set, get) => {
     if (!station) return
     const updated: Station = { ...station, podcastIds: station.podcastIds.filter((id) => id !== podcastId) }
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
+    saveLocalStations(get().stations).catch(() => {})
     await upsertStation(userId, updated)
   },
 

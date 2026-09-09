@@ -2,13 +2,11 @@ import { useEffect, useRef, useState } from 'react'
 import { View, Text, TextInput, ScrollView, FlatList, Pressable, StyleSheet, ActivityIndicator } from 'react-native'
 import { Search, X, Settings, Lock } from 'lucide-react-native'
 import type { DiscoverPodcast } from '@shared/types'
-import { CATEGORY_GENRE_IDS, getCategoryPicks, getPodcastOfTheDay, searchPodcasts } from '../lib/itunes'
+import { getCategoryPicks, getPodcastOfTheDay, searchPodcasts } from '../lib/itunes'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import PodcastPreviewScreen from './PodcastPreviewScreen'
 import { colors, radii, cardShadow } from '../theme'
-
-const CATEGORIES = Object.keys(CATEGORY_GENRE_IDS)
 
 interface Props {
   onOpenAppSettings: () => void
@@ -22,9 +20,17 @@ interface Props {
 export default function DiscoverScreen({ onOpenAppSettings, onAddPrivateFeed }: Props): React.JSX.Element {
   const podcasts = useStore((s) => s.podcasts)
   const subscribe = useStore((s) => s.subscribe)
+  const discoverCategories = useStore((s) => s.discoverCategories)
   const subscribedIds = new Set(podcasts.map((p) => p.id))
 
-  const [category, setCategory] = useState(CATEGORIES[0])
+  const [category, setCategory] = useState(discoverCategories[0])
+
+  // Settings can add/remove categories while Discover is mounted — if the
+  // one currently selected got removed, fall back to whatever's first now
+  // rather than keep showing picks for a chip that's no longer there.
+  useEffect(() => {
+    if (!discoverCategories.includes(category)) setCategory(discoverCategories[0])
+  }, [discoverCategories, category])
   const [picks, setPicks] = useState<DiscoverPodcast[]>([])
   const [dailyPick, setDailyPick] = useState<DiscoverPodcast | null>(null)
   const [picksLoading, setPicksLoading] = useState(false)
@@ -199,7 +205,7 @@ export default function DiscoverScreen({ onOpenAppSettings, onAddPrivateFeed }: 
           )}
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipRow}>
-            {CATEGORIES.map((c) => (
+            {discoverCategories.map((c) => (
               <Pressable
                 key={c}
                 style={[styles.chip, c === category && styles.chipActive]}

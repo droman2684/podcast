@@ -42,19 +42,52 @@ export async function searchPodcasts(term: string): Promise<DiscoverPodcast[]> {
   return toDiscoverPodcasts(data.results)
 }
 
+// Every category Discover can show a chip for, keyed by Apple's stable
+// podcast genre id. A superset of DEFAULT_DISCOVER_CATEGORIES below — the
+// Settings screen's "add category" picker offers whatever's in here but not
+// already in the user's enabled list (see state/store.ts's
+// discoverCategories setting).
 export const CATEGORY_GENRE_IDS: Record<string, string> = {
-  News: '1489',
-  Technology: '1318',
-  Comedy: '1303',
-  'True Crime': '1488',
-  History: '1487',
-  Science: '1533',
+  Arts: '1301',
   Business: '1321',
+  Comedy: '1303',
+  Education: '1304',
+  Fiction: '1483',
+  Government: '1511',
+  History: '1487',
   'Health & Fitness': '1512',
+  'Kids & Family': '1305',
+  Leisure: '1502',
+  Music: '1310',
+  News: '1489',
+  'Religion & Spirituality': '1314',
+  Science: '1533',
+  'Society & Culture': '1324',
+  Sports: '1545',
+  Technology: '1318',
+  'True Crime': '1488',
+  'TV & Film': '1309',
   MLB: '1549',
   NBA: '1548',
   NFL: '1547'
 }
+
+// The chip set Discover shows out of the box, before the user customizes it
+// in Settings — the original curated 11, kept as the default rather than
+// dumping every category above on a first-run user.
+export const DEFAULT_DISCOVER_CATEGORIES: string[] = [
+  'News',
+  'Technology',
+  'Comedy',
+  'True Crime',
+  'History',
+  'Science',
+  'Business',
+  'Health & Fitness',
+  'MLB',
+  'NBA',
+  'NFL'
+]
 
 interface ChartEntry {
   id: { attributes: { 'im:id': string } }

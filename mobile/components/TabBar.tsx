@@ -1,11 +1,10 @@
 import { View, Text, Pressable, StyleSheet } from 'react-native'
-import { Library, Sparkles, ListOrdered, HardDriveDownload } from 'lucide-react-native'
+import { Library, Sparkles, ListOrdered } from 'lucide-react-native'
 import { colors } from '../theme'
 
-export type Tab = 'library' | 'discover' | 'queue' | 'downloads'
+export type Tab = 'library' | 'discover' | 'queue'
 
 const TABS: { key: Tab; label: string; Icon: typeof Library }[] = [
-  { key: 'downloads', label: 'Downloads', Icon: HardDriveDownload },
   { key: 'queue', label: 'Queue', Icon: ListOrdered },
   { key: 'library', label: 'Library', Icon: Library },
   { key: 'discover', label: 'Discover', Icon: Sparkles }

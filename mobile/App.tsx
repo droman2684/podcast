@@ -10,7 +10,6 @@ import PlayerScreen from './screens/PlayerScreen'
 import PodcastSettingsScreen from './screens/PodcastSettingsScreen'
 import DiscoverScreen from './screens/DiscoverScreen'
 import QueueScreen from './screens/QueueScreen'
-import DownloadsScreen from './screens/DownloadsScreen'
 import SettingsScreen from './screens/SettingsScreen'
 import CategoriesScreen from './screens/CategoriesScreen'
 import CategoryDetailScreen from './screens/CategoryDetailScreen'
@@ -43,6 +42,7 @@ export default function App(): React.JSX.Element {
   const loadSettings = useStore((s) => s.loadSettings)
   const loadCachedPositions = useStore((s) => s.loadCachedPositions)
   const loadCachedQueue = useStore((s) => s.loadCachedQueue)
+  const loadCachedStations = useStore((s) => s.loadCachedStations)
   const loadCachedArtwork = useStore((s) => s.loadCachedArtwork)
   const loadCachedPodcastVolume = useStore((s) => s.loadCachedPodcastVolume)
   const loadCachedPlayed = useStore((s) => s.loadCachedPlayed)
@@ -62,7 +62,7 @@ export default function App(): React.JSX.Element {
   const subscribeRealtime = useStore((s) => s.subscribeRealtime)
   const unsubscribeRealtime = useStore((s) => s.unsubscribeRealtime)
 
-  const [tab, setTab] = useState<Tab>('downloads')
+  const [tab, setTab] = useState<Tab>('queue')
   const [route, setRoute] = useState<Route>({ name: 'tabs' })
   // Wherever the Player was opened FROM, so its back button returns there
   // instead of always assuming "the show's episode list" — e.g. opened from
@@ -87,12 +87,14 @@ export default function App(): React.JSX.Element {
     loadSettings()
     loadCachedPositions()
     loadCachedQueue()
+    loadCachedStations()
     loadCachedArtwork()
     loadCachedPodcastVolume()
     loadCachedPlayed()
     // Seeds podcasts/episodesByPodcast for downloaded episodes before
-    // loadLibrary's network fetch has a chance to run, so Downloads (the
-    // default landing tab) doesn't sit empty for however long that takes —
+    // loadLibrary's network fetch has a chance to run, so a downloaded
+    // episode's row (in the Queue or a show's episode list) renders
+    // immediately instead of sitting blank for however long that takes —
     // see loadCachedDownloadedSnapshots' doc comment.
     loadCachedDownloadedSnapshots()
     loadDownloads()
@@ -101,6 +103,7 @@ export default function App(): React.JSX.Element {
     loadSettings,
     loadCachedPositions,
     loadCachedQueue,
+    loadCachedStations,
     loadCachedArtwork,
     loadCachedPodcastVolume,
     loadCachedPlayed,
@@ -205,14 +208,6 @@ export default function App(): React.JSX.Element {
       )
     } else if (tab === 'discover') {
       screen = <DiscoverScreen onOpenAppSettings={goToAppSettings} onAddPrivateFeed={goToAddPrivateFeed} />
-    } else if (tab === 'downloads') {
-      screen = (
-        <DownloadsScreen
-          onPlay={openPlayer}
-          onBrowseLibrary={() => selectTab('library')}
-          onOpenAppSettings={goToAppSettings}
-        />
-      )
     } else {
       screen = (
         <QueueScreen

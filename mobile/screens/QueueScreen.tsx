@@ -23,7 +23,6 @@ import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import DownloadProgressRing from '../components/DownloadProgressRing'
 import SwipeToDelete from '../components/SwipeToDelete'
-import SplitView from '../components/SplitView'
 import { stripHtml } from '../lib/stripHtml'
 import { colors, radii, cardShadow } from '../theme'
 import type { LayoutMode } from '../lib/useLayout'
@@ -39,9 +38,8 @@ interface Props {
   onBrowseDiscover: () => void
   onOpenAppSettings: () => void
   /** Omit (or 'compact') for the phone layout — episode details open in a
-   * bottom-sheet Modal. 'rail'/'regular' switch to SplitView instead, per
-   * spec §7 "Queue... Detail pane replaces the bottom-sheet modal with
-   * episode notes". */
+   * bottom-sheet Modal. 'rail'/'regular' expand the row inline instead (full-
+   * width list, no separate detail pane) — see renderRow's `expanded`. */
   mode?: LayoutMode
 }
 
@@ -196,10 +194,14 @@ export default function QueueScreen({
     // though the actual duration is known once playback starts.
     const durationSec = item.episode.durationSec > 0 ? item.episode.durationSec : isCurrent ? liveDuration : 0
     const progress = durationSec > 0 ? Math.min(1, positionSec / durationSec) : 0
-    const selected = isTablet && detailItem?.episode.id === item.episode.id
+    // On tablet, "selected" both highlights the row and expands its episode
+    // info inline below it — there's no separate detail pane/column to open
+    // it in (see the tablet listBody wiring below).
+    const expanded = isTablet && detailItem?.episode.id === item.episode.id
     const checked = selectedIds.has(item.episode.id)
     return (
-      <View style={[styles.row, selected && styles.rowSelected, isActive && styles.rowDragging]}>
+      <View>
+      <View style={[styles.row, isTablet && styles.rowTablet, expanded && styles.rowSelected, isActive && styles.rowDragging]}>
         {selecting ? (
           <Pressable hitSlop={6} onPress={() => toggleSelected(item.episode.id)} accessibilityLabel="Select episode">
             {checked ? (
@@ -255,7 +257,7 @@ export default function QueueScreen({
             radius={radii.artworkSm}
           />
           <View style={{ flex: 1 }}>
-            <Text style={styles.epTitle} numberOfLines={1}>
+            <Text style={styles.epTitle} numberOfLines={isTablet ? undefined : 1}>
               {item.episode.title}
             </Text>
             <View style={styles.metaRow}>
@@ -292,8 +294,12 @@ export default function QueueScreen({
                 <Download size={17} color={colors.textMuted} />
               )}
             </Pressable>
-            <Pressable hitSlop={10} onPress={() => setDetailItem(item)} accessibilityLabel="Episode details">
-              <Info size={17} color={colors.textMuted} />
+            <Pressable
+              hitSlop={10}
+              onPress={() => (isTablet ? setDetailItem(expanded ? null : item) : setDetailItem(item))}
+              accessibilityLabel={expanded ? 'Hide episode details' : 'Episode details'}
+            >
+              <Info size={17} color={expanded ? colors.accent : colors.textMuted} />
             </Pressable>
             <Pressable
               hitSlop={10}
@@ -308,6 +314,38 @@ export default function QueueScreen({
             </Pressable>
           </>
         )}
+      </View>
+      {expanded && (
+        <View style={styles.inlineDetail}>
+          <Text style={styles.modalDescription}>
+            {stripHtml(item.episode.description) || 'No description available.'}
+          </Text>
+          {!grouped && (
+            <View style={styles.modalMoveRow}>
+              <Pressable
+                style={styles.modalMoveBtn}
+                onPress={() => {
+                  moveToTop(item.episode.id)
+                  setDetailItem(null)
+                }}
+              >
+                <ChevronsUp size={15} color={colors.accent} />
+                <Text style={styles.modalMoveBtnText}>Move to Top</Text>
+              </Pressable>
+              <Pressable
+                style={styles.modalMoveBtn}
+                onPress={() => {
+                  moveToBottom(item.episode.id)
+                  setDetailItem(null)
+                }}
+              >
+                <ChevronsDown size={15} color={colors.accent} />
+                <Text style={styles.modalMoveBtnText}>Move to Bottom</Text>
+              </Pressable>
+            </View>
+          )}
+        </View>
+      )}
       </View>
     )
   }
@@ -483,16 +521,11 @@ export default function QueueScreen({
         </View>
       )}
 
+      {/* On tablet, episode details expand inline within the row (see
+          renderRow's `expanded` block) rather than opening a separate
+          detail pane/column — the list itself just takes the full width. */}
       {isTablet ? (
-        <SplitView
-          mode={mode}
-          hasSelection={detailItem !== null}
-          onBack={() => setDetailItem(null)}
-          backLabel="Queue"
-          emptyDetailLabel="Select an episode to see its notes."
-          list={listBody}
-          detail={detailItem ? <View style={styles.detailPaneContent}>{renderDetailContent(detailItem, mode === 'regular')}</View> : null}
-        />
+        listBody
       ) : (
         <>
           {listBody}
@@ -638,8 +671,12 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     ...cardShadow
   },
-  // iPad SplitView selection ring (spec §6) — see LibraryScreen's
-  // gridCardSelected/listRowSelected for the same pattern.
+  // On tablet the row's height needs to flex with the full (unclipped)
+  // episode title instead of staying pinned to the phone's fixed
+  // ROW_HEIGHT — see epTitle's numberOfLines toggle in renderRow.
+  rowTablet: { height: undefined, minHeight: ROW_HEIGHT, paddingVertical: 12 },
+  // Selection/expansion ring — see LibraryScreen's gridCardSelected/
+  // listRowSelected for the same pattern.
   rowSelected: { borderWidth: 2, borderColor: colors.accent },
   rowDragging: { opacity: 0.85, ...cardShadow },
   moveControls: { alignItems: 'center', gap: 2 },
@@ -693,5 +730,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentBg
   },
   modalMoveBtnText: { color: colors.accent, fontWeight: '600', fontSize: 13 },
-  detailPaneContent: { flex: 1, padding: 24 }
+  inlineDetail: {
+    marginTop: -4,
+    marginBottom: 8,
+    paddingHorizontal: 14,
+    paddingTop: 4,
+    paddingBottom: 12,
+    backgroundColor: colors.surface,
+    borderBottomLeftRadius: radii.item,
+    borderBottomRightRadius: radii.item
+  }
 })

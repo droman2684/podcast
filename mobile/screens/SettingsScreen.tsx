@@ -1,6 +1,8 @@
 import { useState } from 'react'
-import { View, Text, Pressable, ActivityIndicator, StyleSheet } from 'react-native'
+import { View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet } from 'react-native'
+import { X, Plus } from 'lucide-react-native'
 import { useStore, type LibraryView } from '../state/store'
+import { CATEGORY_GENRE_IDS } from '../lib/itunes'
 import { colors, radii, cardShadow } from '../theme'
 
 interface Props {
@@ -16,6 +18,9 @@ export default function SettingsScreen({ onBack }: Props): React.JSX.Element {
   const setSkipBackSec = useStore((s) => s.setSkipBackSec)
   const setSkipForwardSec = useStore((s) => s.setSkipForwardSec)
   const setDefaultLibraryView = useStore((s) => s.setDefaultLibraryView)
+  const discoverCategories = useStore((s) => s.discoverCategories)
+  const addDiscoverCategory = useStore((s) => s.addDiscoverCategory)
+  const removeDiscoverCategory = useStore((s) => s.removeDiscoverCategory)
   const userEmail = useStore((s) => s.userEmail)
   const signOut = useStore((s) => s.signOut)
   const libraryLoading = useStore((s) => s.libraryLoading)
@@ -35,8 +40,11 @@ export default function SettingsScreen({ onBack }: Props): React.JSX.Element {
     setTimeout(() => setJustSynced(false), 2000)
   }
 
+  const [addingCategory, setAddingCategory] = useState(false)
+  const availableCategories = Object.keys(CATEGORY_GENRE_IDS).filter((c) => !discoverCategories.includes(c))
+
   return (
-    <View style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
       <Pressable onPress={onBack}>
         <Text style={styles.back}>{'‹ Back'}</Text>
       </Pressable>
@@ -89,6 +97,47 @@ export default function SettingsScreen({ onBack }: Props): React.JSX.Element {
         </View>
       </View>
 
+      <Text style={styles.sectionTitle}>Discover categories</Text>
+      <View style={styles.card}>
+        <View style={styles.categoryChips}>
+          {discoverCategories.map((c) => (
+            <View key={c} style={styles.categoryChip}>
+              <Text style={styles.categoryChipText}>{c}</Text>
+              <Pressable
+                hitSlop={8}
+                disabled={discoverCategories.length <= 1}
+                onPress={() => removeDiscoverCategory(c)}
+                accessibilityLabel={`Remove ${c}`}
+              >
+                <X size={13} color={discoverCategories.length <= 1 ? colors.textDisabled : colors.textMuted} />
+              </Pressable>
+            </View>
+          ))}
+        </View>
+
+        {availableCategories.length > 0 && (
+          <Pressable style={styles.addCategoryToggle} onPress={() => setAddingCategory((v) => !v)}>
+            <Plus size={14} color={colors.accent} />
+            <Text style={styles.addCategoryToggleText}>{addingCategory ? 'Done' : 'Add category'}</Text>
+          </Pressable>
+        )}
+
+        {addingCategory && (
+          <View style={styles.categoryChips}>
+            {availableCategories.map((c) => (
+              <Pressable
+                key={c}
+                style={styles.categoryChipAdd}
+                onPress={() => addDiscoverCategory(c)}
+                accessibilityLabel={`Add ${c}`}
+              >
+                <Text style={styles.categoryChipAddText}>{c}</Text>
+              </Pressable>
+            ))}
+          </View>
+        )}
+      </View>
+
       <Text style={styles.sectionTitle}>Sync</Text>
       <View style={styles.card}>
         <Pressable style={styles.row} onPress={handleSyncNow} disabled={libraryLoading}>
@@ -109,12 +158,13 @@ export default function SettingsScreen({ onBack }: Props): React.JSX.Element {
       <Pressable style={styles.dangerRow} onPress={() => signOut()}>
         <Text style={styles.dangerText}>Sign Out</Text>
       </Pressable>
-    </View>
+    </ScrollView>
   )
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg, paddingTop: 60, paddingHorizontal: 20 },
+  container: { flex: 1, backgroundColor: colors.bg },
+  scrollContent: { paddingTop: 60, paddingHorizontal: 20, paddingBottom: 40 },
   back: { color: colors.accent, marginBottom: 20, fontSize: 15 },
   title: { fontSize: 22, fontWeight: '700', color: colors.textPrimary, marginBottom: 24 },
   sectionTitle: {
@@ -151,6 +201,33 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14
   },
   rowLabel: { fontSize: 14, fontWeight: '500', color: colors.textPrimary },
+  categoryChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, padding: 4 },
+  categoryChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: radii.pill,
+    backgroundColor: colors.bg
+  },
+  categoryChipText: { fontSize: 12.5, fontWeight: '600', color: colors.textPrimary },
+  categoryChipAdd: {
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    borderColor: colors.border
+  },
+  categoryChipAddText: { fontSize: 12.5, fontWeight: '600', color: colors.accent },
+  addCategoryToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 10
+  },
+  addCategoryToggleText: { fontSize: 13, fontWeight: '600', color: colors.accent },
   dangerRow: {
     marginTop: 4,
     backgroundColor: colors.dangerBg,
