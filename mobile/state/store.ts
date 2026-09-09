@@ -26,6 +26,7 @@ import { parseFeed } from '../lib/rss'
 import { downloadEpisode as downloadEpisodeFile, deleteDownload, listDownloadedUris } from '../lib/downloads'
 import { hashId } from '../lib/hash'
 import { DEFAULT_DISCOVER_CATEGORIES } from '../lib/itunes'
+import { computeStationEpisodes } from '../lib/stationEpisodes'
 import {
   getPrivateFeedCredential,
   savePrivateFeedCredential,
@@ -33,7 +34,7 @@ import {
   basicAuthHeader
 } from '../lib/privateFeedCredentials'
 
-export type LibraryView = 'grid' | 'list' | 'category'
+export type LibraryView = 'grid' | 'list' | 'station'
 
 // Device-local UI preferences (skip durations, default library view) —
 // mirrors the desktop app's windowBounds/columnLayout: real, but not
@@ -544,21 +545,25 @@ interface AppState {
   // "deleted the download" case.
   removeDownload: (episodeId: string) => void
 
-  // "Categories" in the mobile UI — backed by the same `stations` table
-  // desktop uses for its Stations feature, reusing that data model as-is
-  // (id/name/podcastIds) rather than inventing a parallel concept. A
-  // category created on mobile shows up as a Station on desktop and vice
-  // versa. sortBy/episodesPerShow (desktop-only station-as-playlist
-  // settings) are left at their defaults here since mobile only uses these
-  // for grouping the Library, not for aggregate playback.
+  // "Stations" — user-created groupings of podcasts, backed by the same
+  // `stations` table the desktop app's Stations feature uses (id/name/
+  // podcastIds/sortBy/episodesPerShow). Mobile now also acts on sortBy/
+  // episodesPerShow via "Play Station" (see playStation below), so a sort
+  // order set here is the same one desktop's station-as-playlist uses.
   stations: Station[]
   stationsLoaded: boolean
   loadStations: () => Promise<void>
-  createCategory: (name: string) => Promise<Station>
-  renameCategory: (stationId: string, name: string) => Promise<void>
-  deleteCategory: (stationId: string) => Promise<void>
-  addPodcastToCategory: (stationId: string, podcastId: string) => Promise<void>
-  removePodcastFromCategory: (stationId: string, podcastId: string) => Promise<void>
+  createStation: (name: string) => Promise<Station>
+  renameStation: (stationId: string, name: string) => Promise<void>
+  deleteStation: (stationId: string) => Promise<void>
+  addPodcastToStation: (stationId: string, podcastId: string) => Promise<void>
+  removePodcastFromStation: (stationId: string, podcastId: string) => Promise<void>
+  updateStationSettings: (stationId: string, patch: Partial<Pick<Station, 'sortBy' | 'episodesPerShow'>>) => Promise<void>
+  // Builds the station's playlist (see lib/stationEpisodes.ts — same sort/
+  // cap logic as desktop) and replaces the queue with its unplayed episodes,
+  // then loads the first one. Falls back to the full (all-played) list so
+  // the button still does something when nothing is unplayed.
+  playStation: (stationId: string) => Promise<{ podcastId: string; episodeId: string } | null>
 
   // Private feeds: identity (name/url/user) syncs via Supabase's
   // private_feeds table same as desktop, but the password lives ONLY in
@@ -801,7 +806,11 @@ export const useStore = create<AppState>((set, get) => {
       set({
         skipBackSec: saved.skipBackSec ?? DEFAULT_SETTINGS.skipBackSec,
         skipForwardSec: saved.skipForwardSec ?? DEFAULT_SETTINGS.skipForwardSec,
-        defaultLibraryView: saved.defaultLibraryView ?? DEFAULT_SETTINGS.defaultLibraryView,
+        defaultLibraryView:
+          // Legacy stored value from before the Categories→Stations rename.
+          (saved.defaultLibraryView as unknown) === 'category'
+            ? 'station'
+            : saved.defaultLibraryView ?? DEFAULT_SETTINGS.defaultLibraryView,
         queueGroupedByShow: saved.queueGroupedByShow ?? DEFAULT_SETTINGS.queueGroupedByShow,
         discoverCategories:
           saved.discoverCategories && saved.discoverCategories.length > 0
@@ -1387,9 +1396,9 @@ export const useStore = create<AppState>((set, get) => {
     }
     if (queueChanged) await saveQueue(nextQueue)
     // Mirrors the desktop app's unsubscribe cascade: an unsubscribed show
-    // shouldn't linger as a dangling id in a category (Station) that can
-    // never resolve to anything.
-    await Promise.all(affectedStationIds.map((id) => get().removePodcastFromCategory(id, podcastId)))
+    // shouldn't linger as a dangling id in a Station that can never resolve
+    // to anything.
+    await Promise.all(affectedStationIds.map((id) => get().removePodcastFromStation(id, podcastId)))
   },
 
   // Validates the credentials work, saves the password to this device's
@@ -1974,10 +1983,10 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   // upsertStation routes through the shared outbox (never rejects — see its
-  // doc comment), so every category action below is optimistic-and-durable
+  // doc comment), so every station action below is optimistic-and-durable
   // rather than throw-and-roll-back: the local state IS what eventually
   // reaches the server, no matter how long a flaky connection takes.
-  createCategory: async (name) => {
+  createStation: async (name) => {
     const userId = await currentUserId()
     if (!userId) throw new Error('Not signed in')
     const id = await hashId(`${name}-${Date.now()}-${Math.random()}`)
@@ -1988,7 +1997,7 @@ export const useStore = create<AppState>((set, get) => {
     return station
   },
 
-  renameCategory: async (stationId, name) => {
+  renameStation: async (stationId, name) => {
     const userId = await currentUserId()
     if (!userId) return
     const station = get().stations.find((s) => s.id === stationId)
@@ -1999,7 +2008,7 @@ export const useStore = create<AppState>((set, get) => {
     await upsertStation(userId, updated)
   },
 
-  deleteCategory: async (stationId) => {
+  deleteStation: async (stationId) => {
     const userId = await currentUserId()
     if (!userId) return
     set((state) => ({ stations: state.stations.filter((s) => s.id !== stationId) }))
@@ -2014,7 +2023,7 @@ export const useStore = create<AppState>((set, get) => {
     })
   },
 
-  addPodcastToCategory: async (stationId, podcastId) => {
+  addPodcastToStation: async (stationId, podcastId) => {
     const userId = await currentUserId()
     if (!userId) return
     const station = get().stations.find((s) => s.id === stationId)
@@ -2025,7 +2034,7 @@ export const useStore = create<AppState>((set, get) => {
     await upsertStation(userId, updated)
   },
 
-  removePodcastFromCategory: async (stationId, podcastId) => {
+  removePodcastFromStation: async (stationId, podcastId) => {
     const userId = await currentUserId()
     if (!userId) return
     const station = get().stations.find((s) => s.id === stationId)
@@ -2034,6 +2043,31 @@ export const useStore = create<AppState>((set, get) => {
     set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
     saveLocalStations(get().stations).catch(() => {})
     await upsertStation(userId, updated)
+  },
+
+  updateStationSettings: async (stationId, patch) => {
+    const userId = await currentUserId()
+    if (!userId) return
+    const station = get().stations.find((s) => s.id === stationId)
+    if (!station) return
+    const updated: Station = { ...station, ...patch }
+    set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
+    saveLocalStations(get().stations).catch(() => {})
+    await upsertStation(userId, updated)
+  },
+
+  playStation: async (stationId) => {
+    const station = get().stations.find((s) => s.id === stationId)
+    if (!station) return null
+    const episodes = computeStationEpisodes(station, get().episodesByPodcast)
+    const unplayed = episodes.filter((e) => !e.played)
+    const playlist = unplayed.length > 0 ? unplayed : episodes
+    if (playlist.length === 0) return null
+    const episodeIds = playlist.map((e) => e.id)
+    set({ queue: episodeIds })
+    await saveQueue(episodeIds)
+    const first = playlist[0]
+    return { podcastId: first.podcastId, episodeId: first.id }
   },
 
   loadEpisode: (episodeId, opts) => {

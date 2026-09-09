@@ -7,15 +7,15 @@ import Artwork from '../components/Artwork'
 import SwipeToDelete from '../components/SwipeToDelete'
 import { colors, radii, cardShadow } from '../theme'
 
-type ViewMode = 'grid' | 'list' | 'category'
+type ViewMode = 'grid' | 'list' | 'station'
 const GRID_COLUMNS = 3
-const UNCATEGORIZED_ID = '__uncategorized'
+const UNASSIGNED_ID = '__unassigned'
 
 interface Props {
   onSelectPodcast: (id: string) => void
   onOpenSettings: (id: string) => void
   onOpenAppSettings: () => void
-  onManageCategories: () => void
+  onManageStations: () => void
   onRetryPrivateFeed: (feedId: string) => void
   /** iPad SplitView only — shows the selection ring (spec §6) on whichever
    * podcast is open in the detail pane. Always null on phone, where there's
@@ -27,7 +27,7 @@ export default function LibraryScreen({
   onSelectPodcast,
   onOpenSettings,
   onOpenAppSettings,
-  onManageCategories,
+  onManageStations,
   onRetryPrivateFeed,
   selectedPodcastId = null
 }: Props): React.JSX.Element {
@@ -45,21 +45,21 @@ export default function LibraryScreen({
   // here each time is intentional, not a bug.
   const [view, setView] = useState<ViewMode>(defaultLibraryView)
 
-  // A podcast can belong to more than one category (mirrors desktop's
-  // Stations, which this reuses — see the store's stations comment), so it
-  // can legitimately appear under more than one header here. Anything in
-  // zero categories falls into a trailing "Uncategorized" group.
-  const categoryGroups = useMemo(() => {
+  // A podcast can belong to more than one Station (mirrors desktop's
+  // Stations feature, which this reuses — see the store's stations
+  // comment), so it can legitimately appear under more than one header
+  // here. Anything in zero Stations falls into a trailing "Unassigned" group.
+  const stationGroups = useMemo(() => {
     const byId = new Map(podcasts.map((p) => [p.id, p]))
     const groups = stations.map((station) => ({
       id: station.id,
       name: station.name,
       podcasts: station.podcastIds.map((id) => byId.get(id)).filter((p): p is Podcast => p !== undefined)
     }))
-    const categorized = new Set(stations.flatMap((s) => s.podcastIds))
-    const uncategorized = podcasts.filter((p) => !categorized.has(p.id))
-    if (uncategorized.length > 0) {
-      groups.push({ id: UNCATEGORIZED_ID, name: 'Uncategorized', podcasts: uncategorized })
+    const assigned = new Set(stations.flatMap((s) => s.podcastIds))
+    const unassigned = podcasts.filter((p) => !assigned.has(p.id))
+    if (unassigned.length > 0) {
+      groups.push({ id: UNASSIGNED_ID, name: 'Unassigned', podcasts: unassigned })
     }
     return groups
   }, [stations, podcasts])
@@ -198,16 +198,16 @@ export default function LibraryScreen({
             <List size={14} color={view === 'list' ? colors.accent : colors.textPlaceholder} />
           </Pressable>
           <Pressable
-            style={[styles.toggleBtn, view === 'category' && styles.toggleBtnActive]}
-            onPress={() => setView('category')}
-            accessibilityLabel="Category view"
+            style={[styles.toggleBtn, view === 'station' && styles.toggleBtnActive]}
+            onPress={() => setView('station')}
+            accessibilityLabel="Station view"
           >
-            <Tags size={14} color={view === 'category' ? colors.accent : colors.textPlaceholder} />
+            <Tags size={14} color={view === 'station' ? colors.accent : colors.textPlaceholder} />
           </Pressable>
         </View>
-        <Pressable style={styles.manageBtn} onPress={onManageCategories}>
+        <Pressable style={styles.manageBtn} onPress={onManageStations}>
           <Tags size={13} color={colors.accent} />
-          <Text style={styles.manageLink}>Categories</Text>
+          <Text style={styles.manageLink}>Stations</Text>
         </Pressable>
       </View>
       {error && <Text style={styles.error}>{error}</Text>}
@@ -237,10 +237,10 @@ export default function LibraryScreen({
         />
       ) : (
         <ScrollView contentContainerStyle={styles.listContent}>
-          {categoryGroups.length === 0 ? (
+          {stationGroups.length === 0 ? (
             <EmptyState loading={loading} />
           ) : (
-            categoryGroups.map((group) => (
+            stationGroups.map((group) => (
               <View key={group.id} style={styles.group}>
                 <Text style={styles.groupHeader}>{group.name}</Text>
                 {group.podcasts.map((item) => (

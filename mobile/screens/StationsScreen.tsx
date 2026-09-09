@@ -8,16 +8,16 @@ import { colors, radii, cardShadow } from '../theme'
 
 interface Props {
   onBack: () => void
-  onOpenCategory: (stationId: string) => void
+  onOpenStation: (stationId: string) => void
 }
 
-// "Categories" here is the mobile name for the desktop app's Stations
+// "Stations" here is the mobile name for the desktop app's Stations
 // feature — same underlying data (see the store's stations comment), just
 // used on mobile to group the Library instead of as an aggregate playlist.
-export default function CategoriesScreen({ onBack, onOpenCategory }: Props): React.JSX.Element {
+export default function StationsScreen({ onBack, onOpenStation }: Props): React.JSX.Element {
   const stations = useStore((s) => s.stations)
-  const createCategory = useStore((s) => s.createCategory)
-  const deleteCategory = useStore((s) => s.deleteCategory)
+  const createStation = useStore((s) => s.createStation)
+  const deleteStation = useStore((s) => s.deleteStation)
   const [name, setName] = useState('')
   const [creating, setCreating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -28,7 +28,7 @@ export default function CategoriesScreen({ onBack, onOpenCategory }: Props): Rea
     setCreating(true)
     setError(null)
     try {
-      await createCategory(trimmed)
+      await createStation(trimmed)
       setName('')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -39,12 +39,12 @@ export default function CategoriesScreen({ onBack, onOpenCategory }: Props): Rea
 
   const handleDelete = (stationId: string): void => {
     setError(null)
-    deleteCategory(stationId).catch((err) => setError(err instanceof Error ? err.message : String(err)))
+    deleteStation(stationId).catch((err) => setError(err instanceof Error ? err.message : String(err)))
   }
 
   const renderItem = ({ item }: { item: Station }): React.JSX.Element => (
     <SwipeToDelete deleteLabel="Delete" onDelete={() => handleDelete(item.id)}>
-      <Pressable style={styles.row} onPress={() => onOpenCategory(item.id)}>
+      <Pressable style={styles.row} onPress={() => onOpenStation(item.id)}>
         <View style={{ flex: 1 }}>
           <Text style={styles.rowName}>{item.name}</Text>
           <Text style={styles.rowMeta}>
@@ -61,14 +61,14 @@ export default function CategoriesScreen({ onBack, onOpenCategory }: Props): Rea
       <Pressable onPress={onBack}>
         <Text style={styles.back}>{'‹ Library'}</Text>
       </Pressable>
-      <Text style={styles.title}>Categories</Text>
+      <Text style={styles.title}>Stations</Text>
 
       {error && <Text style={styles.error}>{error}</Text>}
 
       <View style={styles.createRow}>
         <TextInput
           style={styles.input}
-          placeholder="New category name"
+          placeholder="New station name"
           value={name}
           onChangeText={setName}
           onSubmitEditing={handleCreate}
@@ -77,7 +77,7 @@ export default function CategoriesScreen({ onBack, onOpenCategory }: Props): Rea
         <Pressable
           style={styles.createBtn}
           onPress={() => !creating && handleCreate()}
-          accessibilityLabel="Add category"
+          accessibilityLabel="Add station"
         >
           <Text style={styles.createBtnText}>{creating ? '…' : 'Add'}</Text>
         </Pressable>
@@ -89,7 +89,7 @@ export default function CategoriesScreen({ onBack, onOpenCategory }: Props): Rea
         contentContainerStyle={styles.listContent}
         renderItem={renderItem}
         ListEmptyComponent={
-          <Text style={styles.empty}>No categories yet — create one above, then add shows to it.</Text>
+          <Text style={styles.empty}>No stations yet — create one above, then add shows to it.</Text>
         }
       />
     </View>

@@ -402,6 +402,12 @@ export default function QueueScreen({
             {renderRow(item, { index: getIndex() ?? 0, total: items.length }, drag, isActive)}
           </SwipeToDelete>
         )}
+        // DraggableFlatList's own scroll extent falls short of its actual
+        // content height by roughly a row (a quirk of how it measures cells
+        // for drag positioning), so without this the last row sits partly
+        // behind the MiniPlayer/TabBar and can never be scrolled into full
+        // view — exactly the row you'd need to reach to move it to the top.
+        ListFooterComponent={<View style={{ height: ROW_HEIGHT }} />}
       />
     )
 

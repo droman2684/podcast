@@ -11,8 +11,8 @@ import PodcastSettingsScreen from './screens/PodcastSettingsScreen'
 import DiscoverScreen from './screens/DiscoverScreen'
 import QueueScreen from './screens/QueueScreen'
 import SettingsScreen from './screens/SettingsScreen'
-import CategoriesScreen from './screens/CategoriesScreen'
-import CategoryDetailScreen from './screens/CategoryDetailScreen'
+import StationsScreen from './screens/StationsScreen'
+import StationDetailScreen from './screens/StationDetailScreen'
 import PrivateFeedScreen from './screens/PrivateFeedScreen'
 import TabBar, { type Tab } from './components/TabBar'
 import Sidebar from './components/Sidebar'
@@ -30,8 +30,8 @@ type Route =
   | { name: 'player'; podcastId: string; episodeId: string }
   | { name: 'podcastSettings'; podcastId: string }
   | { name: 'settings' }
-  | { name: 'categories' }
-  | { name: 'categoryDetail'; stationId: string }
+  | { name: 'stations' }
+  | { name: 'stationDetail'; stationId: string }
   | { name: 'privateFeed'; retryFeedId?: string }
 
 export default function App(): React.JSX.Element {
@@ -159,8 +159,8 @@ export default function App(): React.JSX.Element {
   const goToEpisodes = (podcastId: string): void => setRoute({ name: 'episodes', podcastId })
   const openSettings = (podcastId: string): void => setRoute({ name: 'podcastSettings', podcastId })
   const goToAppSettings = (): void => setRoute({ name: 'settings' })
-  const goToCategories = (): void => setRoute({ name: 'categories' })
-  const goToCategoryDetail = (stationId: string): void => setRoute({ name: 'categoryDetail', stationId })
+  const goToStations = (): void => setRoute({ name: 'stations' })
+  const goToStationDetail = (stationId: string): void => setRoute({ name: 'stationDetail', stationId })
   const goToAddPrivateFeed = (): void => setRoute({ name: 'privateFeed' })
   const goToRetryPrivateFeed = (retryFeedId: string): void => setRoute({ name: 'privateFeed', retryFeedId })
 
@@ -202,7 +202,7 @@ export default function App(): React.JSX.Element {
           onSelectPodcast={goToEpisodes}
           onOpenSettings={openSettings}
           onOpenAppSettings={goToAppSettings}
-          onManageCategories={goToCategories}
+          onManageStations={goToStations}
         onRetryPrivateFeed={goToRetryPrivateFeed}
         />
       )
@@ -233,7 +233,7 @@ export default function App(): React.JSX.Element {
         onSelectPodcast={goToEpisodes}
         onOpenSettings={openSettings}
         onOpenAppSettings={goToAppSettings}
-        onManageCategories={goToCategories}
+        onManageStations={goToStations}
         onRetryPrivateFeed={goToRetryPrivateFeed}
       />
     )
@@ -246,20 +246,25 @@ export default function App(): React.JSX.Element {
         onSelectPodcast={goToEpisodes}
         onOpenSettings={openSettings}
         onOpenAppSettings={goToAppSettings}
-        onManageCategories={goToCategories}
+        onManageStations={goToStations}
         onRetryPrivateFeed={goToRetryPrivateFeed}
       />
     )
   } else if (route.name === 'settings') {
     screen = <SettingsScreen onBack={goToTabs} />
-  } else if (route.name === 'categories') {
-    screen = <CategoriesScreen onBack={goToTabs} onOpenCategory={goToCategoryDetail} />
-  } else if (route.name === 'categoryDetail') {
+  } else if (route.name === 'stations') {
+    screen = <StationsScreen onBack={goToTabs} onOpenStation={goToStationDetail} />
+  } else if (route.name === 'stationDetail') {
     const station = stations.find((s) => s.id === route.stationId)
     screen = station ? (
-      <CategoryDetailScreen station={station} onBack={goToCategories} onDeleted={goToCategories} />
+      <StationDetailScreen
+        station={station}
+        onBack={goToStations}
+        onDeleted={goToStations}
+        onPlay={(podcastId, episodeId) => openPlayer(podcastId, episodeId, true)}
+      />
     ) : (
-      <CategoriesScreen onBack={goToTabs} onOpenCategory={goToCategoryDetail} />
+      <StationsScreen onBack={goToTabs} onOpenStation={goToStationDetail} />
     )
   } else if (route.name === 'privateFeed') {
     screen = <PrivateFeedScreen onBack={goToTabs} retryFeedId={route.retryFeedId} />
@@ -289,7 +294,7 @@ export default function App(): React.JSX.Element {
           onSelectPodcast={goToEpisodes}
           onOpenSettings={openSettings}
           onOpenAppSettings={goToAppSettings}
-          onManageCategories={goToCategories}
+          onManageStations={goToStations}
         onRetryPrivateFeed={goToRetryPrivateFeed}
         />
       )
@@ -325,7 +330,7 @@ export default function App(): React.JSX.Element {
               onSelectPodcast={goToEpisodes}
               onOpenSettings={openSettings}
               onOpenAppSettings={goToAppSettings}
-              onManageCategories={goToCategories}
+              onManageStations={goToStations}
               onRetryPrivateFeed={goToRetryPrivateFeed}
               selectedPodcastId={selectedPodcastId}
             />

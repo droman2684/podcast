@@ -1,6 +1,7 @@
 import { XMLParser } from 'fast-xml-parser'
 import type { Episode } from '@shared/types'
 import { hashId } from './hash'
+import { decodeHtmlEntities } from './stripHtml'
 
 // A separate parser from the desktop app's (src/main/rss.ts, which uses
 // Node's rss-parser + node:crypto — neither runs in React Native) but
@@ -20,10 +21,10 @@ function parseItunesDuration(raw: unknown): number {
 }
 
 function text(value: unknown): string {
-  if (typeof value === 'string') return value
+  if (typeof value === 'string') return decodeHtmlEntities(value)
   if (typeof value === 'number') return String(value)
   if (value && typeof value === 'object' && '#text' in (value as Record<string, unknown>)) {
-    return String((value as Record<string, unknown>)['#text'])
+    return decodeHtmlEntities(String((value as Record<string, unknown>)['#text']))
   }
   return ''
 }
