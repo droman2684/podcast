@@ -421,6 +421,17 @@ interface AppState {
   podcastVolume: Record<string, number>
   podcastSettings: Record<string, PodcastSettings>
   queue: string[]
+  // A station's playlist while "playing the station" — kept separate from
+  // `queue` so Play Station no longer overwrites the user's manually-built
+  // queue (see playStation below). Ephemeral/local: not persisted or synced,
+  // rebuilt fresh from the station's settings each time it's played.
+  stationQueue: string[]
+  activeStationId: string | null
+  // Which of `queue`/`stationQueue` transport (next/previous/auto-advance)
+  // currently acts on. Flips to 'queue' or 'station' in loadEpisode whenever
+  // the episode being loaded belongs to that list.
+  queueSource: 'queue' | 'station'
+  removeFromStationQueue: (episodeId: string) => void
   libraryLoading: boolean
   libraryLoaded: boolean
   libraryError: string | null
@@ -559,11 +570,16 @@ interface AppState {
   addPodcastToStation: (stationId: string, podcastId: string) => Promise<void>
   removePodcastFromStation: (stationId: string, podcastId: string) => Promise<void>
   updateStationSettings: (stationId: string, patch: Partial<Pick<Station, 'sortBy' | 'episodesPerShow'>>) => Promise<void>
+  // Device-local drag reorder for a station's episode list — sets sortBy to
+  // 'manual' and stores the given order (see Station.manualOrder). Not
+  // synced to other devices, same as the rest of manualOrder's handling.
+  reorderStationEpisodes: (stationId: string, episodeIds: string[]) => Promise<void>
   // Builds the station's playlist (see lib/stationEpisodes.ts — same sort/
-  // cap logic as desktop) and replaces the queue with its unplayed episodes,
-  // then loads the first one. Falls back to the full (all-played) list so
-  // the button still does something when nothing is unplayed.
-  playStation: (stationId: string) => Promise<{ podcastId: string; episodeId: string } | null>
+  // cap logic as desktop) into its own stationQueue, separate from the main
+  // queue, and loads either the given episode or the first unplayed one.
+  // Falls back to the full (all-played) list so the button still does
+  // something when nothing is unplayed.
+  playStation: (stationId: string, startEpisodeId?: string) => Promise<{ podcastId: string; episodeId: string } | null>
 
   // Private feeds: identity (name/url/user) syncs via Supabase's
   // private_feeds table same as desktop, but the password lives ONLY in
@@ -729,6 +745,9 @@ export const useStore = create<AppState>((set, get) => {
   positions: {},
   podcastSettings: {},
   queue: [],
+  stationQueue: [],
+  activeStationId: null,
+  queueSource: 'queue',
   libraryLoading: false,
   libraryLoaded: false,
   libraryError: null,
@@ -1555,14 +1574,19 @@ export const useStore = create<AppState>((set, get) => {
         }))
       },
       onStationRow: (row) => {
+        // manualOrder is device-local (see upsertStation's comment) — a
+        // remote row never carries it, so carry the existing local value
+        // forward rather than losing the drag order on every sync pull.
+        const existingManualOrder = get().stations.find((s) => s.id === row.id)?.manualOrder
         const station: Station = {
           id: row.id,
           name: row.name ?? 'Untitled Station',
           podcastIds: Array.isArray(row.podcast_ids) ? row.podcast_ids : [],
-          sortBy: (['newest', 'oldest', 'shortest', 'longest'] as const).includes(row.sort_by as never)
+          sortBy: (['newest', 'oldest', 'shortest', 'longest', 'manual'] as const).includes(row.sort_by as never)
             ? (row.sort_by as Station['sortBy'])
             : 'newest',
-          episodesPerShow: typeof row.episodes_per_show === 'number' ? row.episodes_per_show : 5
+          episodesPerShow: typeof row.episodes_per_show === 'number' ? row.episodes_per_show : 5,
+          manualOrder: existingManualOrder
         }
         set((state) => ({
           stations: [...state.stations.filter((s) => s.id !== station.id), station]
@@ -1958,14 +1982,18 @@ export const useStore = create<AppState>((set, get) => {
       const stationsById = new Map(get().stations.map((s) => [s.id, s]))
       const descriptors = createTableDescriptors({
         onStationRow: (row) => {
+          // See the realtime onStationRow above — manualOrder never comes
+          // from the server, so preserve whatever this device already has.
+          const existingManualOrder = stationsById.get(row.id)?.manualOrder
           stationsById.set(row.id, {
             id: row.id,
             name: row.name ?? 'Untitled Station',
             podcastIds: Array.isArray(row.podcast_ids) ? row.podcast_ids : [],
-            sortBy: (['newest', 'oldest', 'shortest', 'longest'] as const).includes(row.sort_by as never)
+            sortBy: (['newest', 'oldest', 'shortest', 'longest', 'manual'] as const).includes(row.sort_by as never)
               ? (row.sort_by as Station['sortBy'])
               : 'newest',
-            episodesPerShow: typeof row.episodes_per_show === 'number' ? row.episodes_per_show : 5
+            episodesPerShow: typeof row.episodes_per_show === 'number' ? row.episodes_per_show : 5,
+            manualOrder: existingManualOrder
           })
         },
         onStationTombstone: (row) => {
@@ -2056,7 +2084,24 @@ export const useStore = create<AppState>((set, get) => {
     await upsertStation(userId, updated)
   },
 
-  playStation: async (stationId) => {
+  reorderStationEpisodes: async (stationId, episodeIds) => {
+    const userId = await currentUserId()
+    if (!userId) return
+    const station = get().stations.find((s) => s.id === stationId)
+    if (!station) return
+    const updated: Station = { ...station, sortBy: 'manual', manualOrder: episodeIds }
+    set((state) => ({ stations: state.stations.map((s) => (s.id === stationId ? updated : s)) }))
+    saveLocalStations(get().stations).catch(() => {})
+    await upsertStation(userId, updated)
+    // If this station is the one currently playing, keep the live
+    // stationQueue in sync with the new order too.
+    if (get().activeStationId === stationId) set({ stationQueue: episodeIds })
+  },
+
+  // Builds a standalone playlist for the station rather than touching
+  // `queue` — Stations used to overwrite the user's main queue, which meant
+  // playing a station clobbered whatever they'd manually built up there.
+  playStation: async (stationId, startEpisodeId) => {
     const station = get().stations.find((s) => s.id === stationId)
     if (!station) return null
     const episodes = computeStationEpisodes(station, get().episodesByPodcast)
@@ -2064,17 +2109,26 @@ export const useStore = create<AppState>((set, get) => {
     const playlist = unplayed.length > 0 ? unplayed : episodes
     if (playlist.length === 0) return null
     const episodeIds = playlist.map((e) => e.id)
-    set({ queue: episodeIds })
-    await saveQueue(episodeIds)
-    const first = playlist[0]
-    return { podcastId: first.podcastId, episodeId: first.id }
+    set({ stationQueue: episodeIds, activeStationId: stationId, queueSource: 'station' })
+    const target = (startEpisodeId && playlist.find((e) => e.id === startEpisodeId)) || playlist[0]
+    return { podcastId: target.podcastId, episodeId: target.id }
   },
+
+  removeFromStationQueue: (episodeId) =>
+    set((state) => ({ stationQueue: state.stationQueue.filter((id) => id !== episodeId) })),
 
   loadEpisode: (episodeId, opts) => {
     const changed = get().currentEpisodeId !== episodeId
+    // Playing an episode that belongs to the main queue or the current
+    // station's queue makes that the active source for next/previous —
+    // e.g. tapping a row in the Queue tab always means "I want queue
+    // transport now," even if a station was playing a moment ago.
+    const inQueue = get().queue.includes(episodeId)
+    const inStationQueue = get().stationQueue.includes(episodeId)
     set({
       currentEpisodeId: episodeId,
       playing: opts?.autoplay ?? true,
+      ...(inQueue ? { queueSource: 'queue' as const } : inStationQueue ? { queueSource: 'station' as const } : {}),
       ...(changed ? { currentTimeSec: 0, duration: 0 } : {})
     })
   },
@@ -2088,13 +2142,15 @@ export const useStore = create<AppState>((set, get) => {
   setPlaybackRate: (rate) => set({ playbackRate: rate }),
 
   playNextInQueue: () => {
-    const { queue, currentEpisodeId, loadEpisode } = get()
-    const nextId = nextInQueue(queue, currentEpisodeId)
+    const { queue, stationQueue, queueSource, currentEpisodeId, loadEpisode } = get()
+    const activeQueue = queueSource === 'station' ? stationQueue : queue
+    const nextId = nextInQueue(activeQueue, currentEpisodeId)
     if (nextId) loadEpisode(nextId, { autoplay: true })
   },
   playPreviousInQueue: () => {
-    const { queue, currentEpisodeId, loadEpisode } = get()
-    const previousId = previousInQueue(queue, currentEpisodeId)
+    const { queue, stationQueue, queueSource, currentEpisodeId, loadEpisode } = get()
+    const activeQueue = queueSource === 'station' ? stationQueue : queue
+    const previousId = previousInQueue(activeQueue, currentEpisodeId)
     if (previousId) loadEpisode(previousId, { autoplay: true })
   }
   }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { AppState } from 'react-native'
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, type AudioSource } from 'expo-audio'
+import { nextInQueue } from '@shared/queueView'
 import { useStore } from '../state/store'
 import { removeFromQueueOnFinish } from '../lib/queueHelpers'
 import { buildEpisodeIndex } from '../lib/episodeIndex'
@@ -24,10 +25,13 @@ export default function AudioEngine(): null {
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const podcasts = useStore((s) => s.podcasts)
   const queue = useStore((s) => s.queue)
+  const stationQueue = useStore((s) => s.stationQueue)
+  const queueSource = useStore((s) => s.queueSource)
   const savePosition = useStore((s) => s.savePosition)
   const fetchLatestPosition = useStore((s) => s.fetchLatestPosition)
   const setPlayed = useStore((s) => s.setPlayed)
   const removeFromQueue = useStore((s) => s.removeFromQueue)
+  const removeFromStationQueue = useStore((s) => s.removeFromStationQueue)
   const removeDownload = useStore((s) => s.removeDownload)
   const clearSeekRequest = useStore((s) => s.clearSeekRequest)
   const setPlaybackTime = useStore((s) => s.setPlaybackTime)
@@ -240,13 +244,37 @@ export default function AudioEngine(): null {
     finishedFor.current = episode.id
     savePosition(episode.id, 0)
     setPlayed(episode.id, episode.podcastId, true)
-    const nextId = removeFromQueueOnFinish(queue, episode.id, removeFromQueue)
+    // A station's playlist is a separate, local-only list from the main
+    // queue (see store.ts's queueSource) — auto-advance has to walk
+    // whichever one is actually playing, same as PlayerBar/PlayerScreen's
+    // prev/next controls.
+    const nextId =
+      queueSource === 'station'
+        ? (() => {
+            const id = nextInQueue(stationQueue, episode.id)
+            removeFromStationQueue(episode.id)
+            return id
+          })()
+        : removeFromQueueOnFinish(queue, episode.id, removeFromQueue)
     // Default-on: a downloaded episode's local file is only useful until
     // it's been listened to, so free the space automatically once it's done
     // rather than leaving finished downloads sitting on disk indefinitely.
     if (downloadedUris[episode.id]) removeDownload(episode.id)
     if (nextId) loadEpisode(nextId, { autoplay: true })
-  }, [status.didJustFinish, episode, queue, downloadedUris, savePosition, setPlayed, removeFromQueue, removeDownload, loadEpisode])
+  }, [
+    status.didJustFinish,
+    episode,
+    queue,
+    stationQueue,
+    queueSource,
+    downloadedUris,
+    savePosition,
+    setPlayed,
+    removeFromQueue,
+    removeFromStationQueue,
+    removeDownload,
+    loadEpisode
+  ])
 
   // Backgrounding is the closest mobile equivalent of Electron's
   // before-quit (src/main/index.ts in the desktop app): it's the last

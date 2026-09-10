@@ -54,14 +54,17 @@ export default function PlayerBar({ onOpen }: Props): React.JSX.Element | null {
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const queue = useStore((s) => s.queue)
+  const stationQueue = useStore((s) => s.stationQueue)
+  const queueSource = useStore((s) => s.queueSource)
   const playNextInQueue = useStore((s) => s.playNextInQueue)
   const playPreviousInQueue = useStore((s) => s.playPreviousInQueue)
 
   const episodeIndex = useMemo(() => buildEpisodeIndex(episodesByPodcast), [episodesByPodcast])
   const episode = currentEpisodeId ? episodeIndex.get(currentEpisodeId) : undefined
   const podcast = episode ? podcasts.find((p) => p.id === episode.podcastId) : undefined
-  const canGoPrevious = previousInQueue(queue, currentEpisodeId) !== null
-  const canGoNext = nextInQueue(queue, currentEpisodeId) !== null
+  const activeQueue = queueSource === 'station' ? stationQueue : queue
+  const canGoPrevious = previousInQueue(activeQueue, currentEpisodeId) !== null
+  const canGoNext = nextInQueue(activeQueue, currentEpisodeId) !== null
 
   const { onBarLayout, panHandlers, progress, displayedTimeSec, scrubbing } = useScrubBar({
     duration,

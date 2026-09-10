@@ -46,7 +46,7 @@ export interface PodcastSettings {
   notify: boolean
 }
 
-export type StationSort = 'newest' | 'oldest' | 'shortest' | 'longest'
+export type StationSort = 'newest' | 'oldest' | 'shortest' | 'longest' | 'manual'
 
 export interface Station {
   id: string
@@ -54,6 +54,9 @@ export interface Station {
   podcastIds: string[]
   sortBy: StationSort
   episodesPerShow: number // 0 = All
+  // Device-local drag order used when sortBy === 'manual' (episode ids).
+  // Not synced — see mobile's store.ts upsertStation comment.
+  manualOrder?: string[]
 }
 
 export interface DiscoverPodcast {

@@ -57,6 +57,8 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
   const requestSeek = useStore((s) => s.requestSeek)
   const setPlaybackRate = useStore((s) => s.setPlaybackRate)
   const queue = useStore((s) => s.queue)
+  const stationQueue = useStore((s) => s.stationQueue)
+  const queueSource = useStore((s) => s.queueSource)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const loadEpisode = useStore((s) => s.loadEpisode)
@@ -141,13 +143,17 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
   // "play this again" right under the transport controls for it.
   const episodeIndex = useMemo(() => buildEpisodeIndex(episodesByPodcast), [episodesByPodcast])
   const podcastById = useMemo(() => new Map(podcasts.map((p) => [p.id, p])), [podcasts])
+  // "Up next" follows whichever list is actually driving transport right
+  // now — the main queue, or a station's playlist while a station is
+  // playing (see store.ts's queueSource).
+  const activeQueue = queueSource === 'station' ? stationQueue : queue
   const upNext = useMemo(
     () =>
-      queue
+      activeQueue
         .filter((id) => id !== episode.id)
         .map((id) => episodeIndex.get(id))
         .filter((e): e is Episode => e !== undefined),
-    [queue, episode.id, episodeIndex]
+    [activeQueue, episode.id, episodeIndex]
   )
 
   // Media-center-style transport (mirrors desktop's NowPlayingPanel):
@@ -155,8 +161,8 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
   // rather than just a skip button and a play/pause button. Previous/Next
   // dim rather than disappear when there's nothing to skip to, so the row
   // doesn't reflow depending on queue position.
-  const canGoPrevious = previousInQueue(queue, episode.id) !== null
-  const canGoNext = nextInQueue(queue, episode.id) !== null
+  const canGoPrevious = previousInQueue(activeQueue, episode.id) !== null
+  const canGoNext = nextInQueue(activeQueue, episode.id) !== null
 
   // Light impact for the small, frequent taps (skip/prev/next); a slightly
   // heavier one for play/pause since it's the single most-pressed control
