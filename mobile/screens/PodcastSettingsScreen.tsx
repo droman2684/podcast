@@ -19,6 +19,8 @@ interface Props {
 export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed }: Props): React.JSX.Element {
   const notify = useStore((s) => s.podcastSettings[podcast.id]?.notify ?? false)
   const setNotify = useStore((s) => s.setNotify)
+  const favorite = useStore((s) => s.podcastSettings[podcast.id]?.favorite ?? false)
+  const setFavorite = useStore((s) => s.setFavorite)
   const volume = useStore((s) => s.podcastVolume[podcast.id] ?? 1)
   const setPodcastVolume = useStore((s) => s.setPodcastVolume)
   const unsubscribe = useStore((s) => s.unsubscribe)
@@ -70,6 +72,15 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
     setError(null)
     try {
       await setNotify(podcast.id, value)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
+  const handleFavoriteToggle = async (value: boolean): Promise<void> => {
+    setError(null)
+    try {
+      await setFavorite(podcast.id, value)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -133,6 +144,18 @@ export default function PodcastSettingsScreen({ podcast, onBack, onUnsubscribed 
       </View>
 
       {error && <Text style={styles.error}>{error}</Text>}
+
+      <Text style={styles.sectionTitle}>Favorite</Text>
+      <View style={styles.card}>
+        <View style={styles.row}>
+          <Text style={styles.rowLabel}>Favorite show</Text>
+          <Switch
+            value={favorite}
+            onValueChange={handleFavoriteToggle}
+            accessibilityLabel="Favorite show"
+          />
+        </View>
+      </View>
 
       <Text style={styles.sectionTitle}>Notifications</Text>
       <View style={styles.card}>

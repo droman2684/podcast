@@ -463,6 +463,7 @@ interface AppState {
   subscribe: (podcast: DiscoverPodcast) => Promise<void>
   unsubscribe: (podcastId: string) => Promise<void>
   setNotify: (podcastId: string, notify: boolean) => Promise<void>
+  setFavorite: (podcastId: string, favorite: boolean) => Promise<void>
   setPodcastArtwork: (podcastId: string, dataUrl: string | null) => Promise<void>
   setPodcastVolume: (podcastId: string, volume: number) => Promise<void>
 
@@ -1009,7 +1010,7 @@ export const useStore = create<AppState>((set, get) => {
 
       const otherDescriptors = createTableDescriptors({
         onPodcastSettingsRow: (row) => {
-          podcastSettings[row.podcast_id] = { notify: row.notify }
+          podcastSettings[row.podcast_id] = { notify: row.notify, favorite: row.favorite ?? false }
           if (row.last_seen_pub_date) remoteLastSeen[row.podcast_id] = row.last_seen_pub_date
         },
         onQueueRow: (row) => {
@@ -1288,12 +1289,18 @@ export const useStore = create<AppState>((set, get) => {
       if (newEpisodes.length > 0) {
         const existingQueue = get().queue
         const existingSet = new Set(existingQueue)
-        const toAdd = newEpisodes
+        const toAddEpisodes = newEpisodes
           .filter((e) => !existingSet.has(e.id))
           .sort((a, b) => (a.pubDateIso < b.pubDateIso ? -1 : 1))
-          .map((e) => e.id)
+        const toAdd = toAddEpisodes.map((e) => e.id)
         if (toAdd.length > 0) {
-          const nextQueue = [...existingQueue, ...toAdd]
+          // Favorite shows' new episodes jump to the front of the queue
+          // instead of the back — see setFavorite's doc comment.
+          const favoriteIds = toAddEpisodes
+            .filter((e) => podcastSettings[e.podcastId]?.favorite)
+            .map((e) => e.id)
+          const restIds = toAdd.filter((id) => !favoriteIds.includes(id))
+          const nextQueue = [...favoriteIds, ...existingQueue, ...restIds]
           set({ queue: nextQueue })
           await saveQueue(nextQueue)
           console.log(`[loadLibrary] auto-queued ${toAdd.length} new episode(s)`)
@@ -1495,7 +1502,10 @@ export const useStore = create<AppState>((set, get) => {
   // once the network recovers.
   setNotify: async (podcastId, notify) => {
     set((state) => ({
-      podcastSettings: { ...state.podcastSettings, [podcastId]: { notify } }
+      podcastSettings: {
+        ...state.podcastSettings,
+        [podcastId]: { ...state.podcastSettings[podcastId], notify }
+      }
     }))
     const userId = await currentUserId()
     if (!userId) return
@@ -1506,6 +1516,28 @@ export const useStore = create<AppState>((set, get) => {
       user_id: userId,
       podcast_id: podcastId,
       notify
+    })
+  },
+
+  // A favorited show's episodes jump to the front of the queue instead of
+  // the back, both here (via addToQueue) and in loadLibrary's auto-queue-
+  // new-episodes path — the point of favoriting a show is to hear it next.
+  setFavorite: async (podcastId, favorite) => {
+    set((state) => ({
+      podcastSettings: {
+        ...state.podcastSettings,
+        [podcastId]: { ...state.podcastSettings[podcastId], notify: state.podcastSettings[podcastId]?.notify ?? false, favorite }
+      }
+    }))
+    const userId = await currentUserId()
+    if (!userId) return
+    const ledger = getLedger()
+    await ledger.ensureLoaded()
+    ledger.touch(`podcastSettings:${podcastId}`)
+    await getOutbox().enqueue('podcast_settings', `podcastSettings:${podcastId}`, {
+      user_id: userId,
+      podcast_id: podcastId,
+      favorite
     })
   },
 
@@ -1570,7 +1602,10 @@ export const useStore = create<AppState>((set, get) => {
       },
       onPodcastSettingsRow: (row) => {
         set((state) => ({
-          podcastSettings: { ...state.podcastSettings, [row.podcast_id]: { notify: row.notify } }
+          podcastSettings: {
+            ...state.podcastSettings,
+            [row.podcast_id]: { notify: row.notify, favorite: row.favorite ?? false }
+          }
         }))
       },
       onStationRow: (row) => {
@@ -1852,8 +1887,15 @@ export const useStore = create<AppState>((set, get) => {
   // there's nothing to roll back to here anymore: the optimistic queue
   // state IS what gets pushed, eventually, no matter how long that takes.
   addToQueue: async (episodeId) => {
-    if (get().queue.includes(episodeId)) return
-    const next = [...get().queue, episodeId]
+    const state = get()
+    if (state.queue.includes(episodeId)) return
+    let episode: Episode | undefined
+    for (const episodes of Object.values(state.episodesByPodcast)) {
+      episode = episodes.find((e) => e.id === episodeId)
+      if (episode) break
+    }
+    const isFavorite = episode ? (state.podcastSettings[episode.podcastId]?.favorite ?? false) : false
+    const next = isFavorite ? [episodeId, ...state.queue] : [...state.queue, episodeId]
     set({ queue: next })
     await saveQueue(next)
   },

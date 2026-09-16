@@ -79,6 +79,7 @@ export interface PodcastSettingsRow {
   user_id: string
   podcast_id: string
   notify: boolean
+  favorite?: boolean
   last_seen_pub_date: string | null
   updated_at: string
   rev?: number

@@ -311,3 +311,6 @@ create trigger trg_episode_played_rev before insert or update on episode_played
 drop trigger if exists trg_private_feeds_rev on private_feeds;
 create trigger trg_private_feeds_rev before insert or update on private_feeds
   for each row execute function set_synced_rev();
+
+-- Favorite shows (mobile only) — run this once too (Supabase SQL Editor).
+alter table podcast_settings add column if not exists favorite boolean not null default false;

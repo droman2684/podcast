@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AppState } from 'react-native'
 import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync, type AudioSource } from 'expo-audio'
 import { nextInQueue } from '@shared/queueView'
@@ -45,6 +45,10 @@ export default function AudioEngine(): null {
   const status = useAudioPlayerStatus(player)
   const loadedEpisodeId = useRef<string | null>(null)
   const seededPositionFor = useRef<string | null>(null)
+  // Tracked in state (not a ref) so the autoplay effect below re-runs once
+  // seeding finishes — it needs to actually see the value change, not just
+  // read a mutable ref on some other render.
+  const [seedReadyFor, setSeedReadyFor] = useState<string | null>(null)
   const finishedFor = useRef<string | null>(null)
   const prevDidJustFinish = useRef(false)
 
@@ -123,16 +127,27 @@ export default function AudioEngine(): null {
   // the local `positions` cache, which reflects whatever this device last
   // synced — possibly stale if listening happened on another device since.
   // Falls back to the local value only if the fetch fails (e.g. offline).
+  // Autoplay below is gated on seedReadyFor so play() can't fire until the
+  // seekTo() here has actually landed — otherwise a fresh player.replace()
+  // reports currentTime 0 and starts playing from there for the instant
+  // between load and this fetch resolving, which on a second device looked
+  // like the episode "restarting" right after briefly showing the correct
+  // resume position.
   useEffect(() => {
     if (!status.isLoaded || !episode || seededPositionFor.current === episode.id) return
     seededPositionFor.current = episode.id
     let cancelled = false
     const episodeId = episode.id
-    fetchLatestPosition(episodeId).then((remoteSec) => {
-      if (cancelled || loadedEpisodeId.current !== episodeId) return
-      const saved = remoteSec ?? positions[episodeId] ?? 0
-      if (saved > 0) player.seekTo(saved)
-    })
+    fetchLatestPosition(episodeId)
+      .then((remoteSec) => {
+        if (cancelled || loadedEpisodeId.current !== episodeId) return
+        const saved = remoteSec ?? positions[episodeId] ?? 0
+        if (saved > 0) player.seekTo(saved)
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setSeedReadyFor(episodeId)
+      })
     return () => {
       cancelled = true
     }
@@ -144,10 +159,15 @@ export default function AudioEngine(): null {
   // is silently dropped by expo-audio. Re-running once isLoaded flips true
   // catches that case — without it, autoplaying from Queue/Downloads left
   // the episode paused until the user tapped play a second time.
+  // Also gated on seedReadyFor matching the current episode — see the
+  // seeding effect above for why: without this, play() could start the
+  // player at position 0 before the resume-position fetch/seekTo above had
+  // a chance to run.
   useEffect(() => {
+    if (episode?.id && seedReadyFor !== episode.id) return
     if (playing) player.play()
     else player.pause()
-  }, [playing, episode?.id, status.isLoaded, player])
+  }, [playing, episode?.id, status.isLoaded, player, seedReadyFor])
 
   // Flushes on every playing -> paused transition, keyed only on `playing`
   // itself (not episode?.id) so this doesn't also fire — using the wrong

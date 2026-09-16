@@ -44,6 +44,11 @@ export interface PrivateFeed {
 
 export interface PodcastSettings {
   notify: boolean
+  // Optional (rather than required like `notify`) so the desktop app's
+  // existing podcast_settings rows/persistence — which predate this field
+  // and don't set it — keep type-checking without every read site needing
+  // a `?? false` fallback. Mobile is the only platform that sets it today.
+  favorite?: boolean
 }
 
 export type StationSort = 'newest' | 'oldest' | 'shortest' | 'longest' | 'manual'
