@@ -111,6 +111,17 @@ async function loadLocalQueue(): Promise<string[]> {
   }
 }
 
+// Shared by removeFromQueue/removeManyFromQueue to find which podcast a
+// queued episode belongs to (setPlayed needs both ids) without importing
+// QueueScreen's own byEpisodeId map — episodesByPodcast is small enough
+// that a linear scan per removal is fine.
+function findQueuedEpisodePodcastId(state: AppState, episodeId: string): string | undefined {
+  for (const [podcastId, episodes] of Object.entries(state.episodesByPodcast)) {
+    if (episodes.some((e) => e.id === episodeId)) return podcastId
+  }
+  return undefined
+}
+
 async function saveLocalQueue(queue: string[]): Promise<void> {
   try {
     await AsyncStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue))
@@ -1125,12 +1136,6 @@ export const useStore = create<AppState>((set, get) => {
       // already-established mark count as new.
       const lastSeen = await loadLastSeenMap()
       const newEpisodes: Episode[] = []
-      // Subset of newEpisodes actually eligible for auto-download — only
-      // private-feed shows, since those are the ones that can disappear from
-      // their origin server or get taken down without warning; regular
-      // public feeds stay re-fetchable from the CDN indefinitely, so
-      // auto-downloading every new episode there just burns device storage.
-      const newEpisodesToDownload: Episode[] = []
       // Podcast ids whose high-water mark advances past what's currently
       // synced to podcast_settings.last_seen_pub_date — pushed once after
       // the loop so every other device shares the advance instead of each
@@ -1238,7 +1243,6 @@ export const useStore = create<AppState>((set, get) => {
               for (const e of episodes) {
                 if (!e.played && e.pubDateIso > priorMark) {
                   newEpisodes.push(e)
-                  if (row.is_private) newEpisodesToDownload.push(e)
                 }
               }
             }
@@ -1306,16 +1310,17 @@ export const useStore = create<AppState>((set, get) => {
           console.log(`[loadLibrary] auto-queued ${toAdd.length} new episode(s)`)
         }
 
-        // Auto-download every genuinely new episode from a private feed so
-        // it's ready offline by the time the user gets to it — see
-        // newEpisodesToDownload's doc comment for why public-feed episodes
-        // are excluded. Not awaited — loadLibrary shouldn't sit blocked on
-        // however long a batch of downloads takes, and each download's own
-        // state (downloadingIds/downloadProgress) already renders fine while
-        // the rest of the app carries on.
-        if (newEpisodesToDownload.length > 0) {
-          void mapWithConcurrency(newEpisodesToDownload, 2, (e) => get().downloadEpisode(e)).then(() => {
-            console.log(`[loadLibrary] auto-downloaded ${newEpisodesToDownload.length} new private episode(s)`)
+        // Auto-download every genuinely new episode so it's ready offline by
+        // the time the user gets to it — queued episodes default to
+        // downloaded (see addToQueue's own downloadEpisode call, which this
+        // mirrors for the auto-queue path above that sets `queue` directly
+        // instead of going through that action). Not awaited — loadLibrary
+        // shouldn't sit blocked on however long a batch of downloads takes,
+        // and each download's own state (downloadingIds/downloadProgress)
+        // already renders fine while the rest of the app carries on.
+        if (toAddEpisodes.length > 0) {
+          void mapWithConcurrency(toAddEpisodes, 2, (e) => get().downloadEpisode(e)).then(() => {
+            console.log(`[loadLibrary] auto-downloaded ${toAddEpisodes.length} new episode(s)`)
           })
         }
       }
@@ -1898,20 +1903,42 @@ export const useStore = create<AppState>((set, get) => {
     const next = isFavorite ? [episodeId, ...state.queue] : [...state.queue, episodeId]
     set({ queue: next })
     await saveQueue(next)
+    // Queued episodes default to downloaded — see downloadEpisode's doc
+    // comment on its own addToQueue call for the reverse direction. This
+    // also seeds DOWNLOADED_SNAPSHOT_STORAGE_KEY for the episode, which is
+    // what lets the Queue tab render this row instantly on a future cold
+    // start instead of waiting on loadLibrary's full feed refetch.
+    // downloadEpisode no-ops if it's already downloaded/downloading.
+    if (episode) void get().downloadEpisode(episode)
   },
 
+  // Removing from the queue means "I'm done with this" — treated the same
+  // as finishing it: marked played (mirrors AudioEngine's setPlayed on
+  // natural finish) and its download reclaimed, since a played episode
+  // isn't going to be replayed from storage. removeDownload no-ops if it
+  // was never downloaded.
   removeFromQueue: async (episodeId) => {
-    const next = get().queue.filter((id) => id !== episodeId)
+    const state = get()
+    const next = state.queue.filter((id) => id !== episodeId)
     set({ queue: next })
     await saveQueue(next)
+    const podcastId = findQueuedEpisodePodcastId(state, episodeId)
+    if (podcastId) void get().setPlayed(episodeId, podcastId, true)
+    if (state.downloadedUris[episodeId]) get().removeDownload(episodeId)
   },
 
   removeManyFromQueue: async (episodeIds) => {
     if (episodeIds.length === 0) return
+    const state = get()
     const toRemove = new Set(episodeIds)
-    const next = get().queue.filter((id) => !toRemove.has(id))
+    const next = state.queue.filter((id) => !toRemove.has(id))
     set({ queue: next })
     await saveQueue(next)
+    for (const episodeId of episodeIds) {
+      const podcastId = findQueuedEpisodePodcastId(state, episodeId)
+      if (podcastId) void get().setPlayed(episodeId, podcastId, true)
+      if (state.downloadedUris[episodeId]) get().removeDownload(episodeId)
+    }
   },
 
   reorderQueue: async (episodeIds) => {
