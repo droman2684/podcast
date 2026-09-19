@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { View, Text, ScrollView, StyleSheet } from 'react-native'
 import { colors } from '../theme'
+import { captureError } from '../lib/sentry'
 
 interface Props {
   children: ReactNode
@@ -24,6 +25,7 @@ export default class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
     console.error('[ErrorBoundary] caught render error:', error, info.componentStack)
+    captureError(error, { componentStack: info.componentStack ?? undefined })
     this.setState({ info: info.componentStack ?? null })
   }
 

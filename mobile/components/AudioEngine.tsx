@@ -36,6 +36,10 @@ export default function AudioEngine(): null {
   const clearSeekRequest = useStore((s) => s.clearSeekRequest)
   const setPlaybackTime = useStore((s) => s.setPlaybackTime)
   const loadEpisode = useStore((s) => s.loadEpisode)
+  const pausePlayback = useStore((s) => s.pausePlayback)
+  const sleepTimerEndAt = useStore((s) => s.sleepTimerEndAt)
+  const sleepTimerEndOfEpisode = useStore((s) => s.sleepTimerEndOfEpisode)
+  const clearSleepTimer = useStore((s) => s.clearSleepTimer)
 
   const episodeIndex = useMemo(() => buildEpisodeIndex(episodesByPodcast), [episodesByPodcast])
   const episode = currentEpisodeId ? (episodeIndex.get(currentEpisodeId) ?? null) : null
@@ -208,6 +212,25 @@ export default function AudioEngine(): null {
     setPlaybackTime(status.currentTime, status.duration)
   }, [status.currentTime, status.duration, setPlaybackTime])
 
+  // A single timeout keyed to sleepTimerEndAt rather than a polling
+  // interval — setSleepTimerMinutes always sets an absolute timestamp, so
+  // this just needs to fire once at that moment (or immediately if it's
+  // already passed, e.g. the app was backgrounded through the deadline).
+  useEffect(() => {
+    if (!sleepTimerEndAt) return
+    const msLeft = sleepTimerEndAt - Date.now()
+    if (msLeft <= 0) {
+      pausePlayback()
+      clearSleepTimer()
+      return
+    }
+    const timeout = setTimeout(() => {
+      pausePlayback()
+      clearSleepTimer()
+    }, msLeft)
+    return () => clearTimeout(timeout)
+  }, [sleepTimerEndAt, pausePlayback, clearSleepTimer])
+
   useEffect(() => {
     if (!episode) return
     try {
@@ -280,6 +303,14 @@ export default function AudioEngine(): null {
     // it's been listened to, so free the space automatically once it's done
     // rather than leaving finished downloads sitting on disk indefinitely.
     if (downloadedUris[episode.id]) removeDownload(episode.id)
+    // "End of episode" sleep timer mode: the episode that just finished IS
+    // the stopping point, so stay paused on it (still removed from its
+    // queue above) instead of auto-advancing into the next one.
+    if (sleepTimerEndOfEpisode) {
+      pausePlayback()
+      clearSleepTimer()
+      return
+    }
     if (nextId) loadEpisode(nextId, { autoplay: true })
   }, [
     status.didJustFinish,
@@ -288,6 +319,9 @@ export default function AudioEngine(): null {
     stationQueue,
     queueSource,
     downloadedUris,
+    sleepTimerEndOfEpisode,
+    pausePlayback,
+    clearSleepTimer,
     savePosition,
     setPlayed,
     removeFromQueue,

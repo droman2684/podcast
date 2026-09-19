@@ -1,11 +1,21 @@
 import { useMemo, useState } from 'react'
-import { View, Text, FlatList, ScrollView, Pressable, Alert, StyleSheet, ActivityIndicator } from 'react-native'
-import { Grid2x2, List, Tags, ChevronRight, Settings, MoreVertical, Lock } from 'lucide-react-native'
-import type { Podcast } from '@shared/types'
+import { View, Text, TextInput, FlatList, ScrollView, Pressable, Alert, StyleSheet, ActivityIndicator } from 'react-native'
+import { Grid2x2, List, Tags, ChevronRight, Settings, MoreVertical, Lock, Search, X } from 'lucide-react-native'
+import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from '../components/Artwork'
 import SwipeToDelete from '../components/SwipeToDelete'
 import { colors, radii, cardShadow } from '../theme'
+
+interface EpisodeSearchResult {
+  podcast: Podcast
+  episode: Episode
+}
+
+// Caps how many rows the flat search-results list renders — a search term
+// that matches broadly (a common word across many shows) has no reason to
+// materialize hundreds of rows just to answer "did I find it yet."
+const MAX_SEARCH_RESULTS = 50
 
 type ViewMode = 'grid' | 'list' | 'station'
 const GRID_COLUMNS = 3
@@ -39,11 +49,34 @@ export default function LibraryScreen({
   const defaultLibraryView = useStore((s) => s.defaultLibraryView)
   const stations = useStore((s) => s.stations)
   const privateFeedsMissingCredential = useStore((s) => s.privateFeedsMissingCredential)
+  const episodesByPodcast = useStore((s) => s.episodesByPodcast)
 
   // Seeded from the user's Settings preference. This screen remounts on
   // every tab visit (see comment below), so re-reading the store default
   // here each time is intentional, not a bug.
   const [view, setView] = useState<ViewMode>(defaultLibraryView)
+
+  // Searches across every subscribed show's episode titles (not just show
+  // names, which the grid/list already browse fine on their own) — the gap
+  // this fills is "I remember an episode title but not which show it was
+  // on." Local/in-memory only, same scope as Discover's search is the iTunes
+  // directory: this one is your own library, not the wider catalog.
+  const [searchTerm, setSearchTerm] = useState('')
+  const searchActive = searchTerm.trim().length > 0
+  const searchResults = useMemo<EpisodeSearchResult[]>(() => {
+    const term = searchTerm.trim().toLowerCase()
+    if (!term) return []
+    const results: EpisodeSearchResult[] = []
+    for (const podcast of podcasts) {
+      for (const episode of episodesByPodcast[podcast.id] ?? []) {
+        if (episode.title.toLowerCase().includes(term) || podcast.name.toLowerCase().includes(term)) {
+          results.push({ podcast, episode })
+        }
+      }
+    }
+    results.sort((a, b) => (a.episode.pubDateIso < b.episode.pubDateIso ? 1 : -1))
+    return results.slice(0, MAX_SEARCH_RESULTS)
+  }, [searchTerm, podcasts, episodesByPodcast])
 
   // A podcast can belong to more than one Station (mirrors desktop's
   // Stations feature, which this reuses — see the store's stations
@@ -181,37 +214,81 @@ export default function LibraryScreen({
           <Settings size={20} color={colors.textMuted} />
         </Pressable>
       </View>
-      <View style={styles.toolbar}>
-        <View style={styles.toggle}>
-          <Pressable
-            style={[styles.toggleBtn, view === 'grid' && styles.toggleBtnActive]}
-            onPress={() => setView('grid')}
-            accessibilityLabel="Grid view"
-          >
-            <Grid2x2 size={14} color={view === 'grid' ? colors.accent : colors.textPlaceholder} />
+      <View style={styles.searchBar}>
+        <Search size={15} color={colors.textPlaceholder} />
+        <TextInput
+          style={styles.searchInput}
+          value={searchTerm}
+          onChangeText={setSearchTerm}
+          placeholder="Search your episodes"
+          placeholderTextColor={colors.textPlaceholder}
+          autoCorrect={false}
+        />
+        {searchActive && (
+          <Pressable hitSlop={10} onPress={() => setSearchTerm('')} accessibilityLabel="Clear search">
+            <X size={15} color={colors.textPlaceholder} />
           </Pressable>
-          <Pressable
-            style={[styles.toggleBtn, view === 'list' && styles.toggleBtnActive]}
-            onPress={() => setView('list')}
-            accessibilityLabel="List view"
-          >
-            <List size={14} color={view === 'list' ? colors.accent : colors.textPlaceholder} />
-          </Pressable>
-          <Pressable
-            style={[styles.toggleBtn, view === 'station' && styles.toggleBtnActive]}
-            onPress={() => setView('station')}
-            accessibilityLabel="Station view"
-          >
-            <Tags size={14} color={view === 'station' ? colors.accent : colors.textPlaceholder} />
+        )}
+      </View>
+      {!searchActive && (
+        <View style={styles.toolbar}>
+          <View style={styles.toggle}>
+            <Pressable
+              style={[styles.toggleBtn, view === 'grid' && styles.toggleBtnActive]}
+              onPress={() => setView('grid')}
+              accessibilityLabel="Grid view"
+            >
+              <Grid2x2 size={14} color={view === 'grid' ? colors.accent : colors.textPlaceholder} />
+            </Pressable>
+            <Pressable
+              style={[styles.toggleBtn, view === 'list' && styles.toggleBtnActive]}
+              onPress={() => setView('list')}
+              accessibilityLabel="List view"
+            >
+              <List size={14} color={view === 'list' ? colors.accent : colors.textPlaceholder} />
+            </Pressable>
+            <Pressable
+              style={[styles.toggleBtn, view === 'station' && styles.toggleBtnActive]}
+              onPress={() => setView('station')}
+              accessibilityLabel="Station view"
+            >
+              <Tags size={14} color={view === 'station' ? colors.accent : colors.textPlaceholder} />
+            </Pressable>
+          </View>
+          <Pressable style={styles.manageBtn} onPress={onManageStations}>
+            <Tags size={13} color={colors.accent} />
+            <Text style={styles.manageLink}>Stations</Text>
           </Pressable>
         </View>
-        <Pressable style={styles.manageBtn} onPress={onManageStations}>
-          <Tags size={13} color={colors.accent} />
-          <Text style={styles.manageLink}>Stations</Text>
-        </Pressable>
-      </View>
+      )}
       {error && <Text style={styles.error}>{error}</Text>}
-      {view === 'grid' ? (
+      {searchActive ? (
+        <FlatList
+          data={searchResults}
+          key="search"
+          keyExtractor={(item) => item.episode.id}
+          contentContainerStyle={styles.listContent}
+          renderItem={({ item }) => (
+            <Pressable style={styles.listRow} onPress={() => openPodcast(item.podcast)}>
+              <Artwork
+                url={item.podcast.customArtworkUrl ?? item.episode.artworkUrl ?? item.podcast.artworkUrl}
+                size={48}
+                radius={radii.artworkSm}
+              />
+              <View style={styles.listMeta}>
+                <Text style={styles.listName} numberOfLines={1}>
+                  {item.episode.title}
+                </Text>
+                <Text style={styles.listAuthor} numberOfLines={1}>
+                  {item.podcast.name}
+                </Text>
+              </View>
+              <ChevronRight size={16} color={colors.textDisabled} />
+            </Pressable>
+          )}
+          ListEmptyComponent={<Text style={styles.empty}>No episodes match “{searchTerm.trim()}.”</Text>}
+        />
+      ) : view === 'grid' ? (
         <FlatList
           data={podcasts}
           key="grid"
@@ -299,6 +376,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentBg
   },
   manageLink: { fontSize: 12.5, fontWeight: '600', color: colors.accent },
+  searchBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginHorizontal: SCREEN_PADDING,
+    marginBottom: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: radii.pill,
+    backgroundColor: '#e8e8ed'
+  },
+  searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, padding: 0 },
   toggle: {
     flexDirection: 'row',
     backgroundColor: '#e8e8ed',

@@ -628,6 +628,18 @@ interface AppState {
   // onPress without checking first.
   playNextInQueue: () => void
   playPreviousInQueue: () => void
+  pausePlayback: () => void
+
+  // Sleep timer — ephemeral/local like the rest of live playback state
+  // above, not persisted or synced. Exactly one of the two is ever active:
+  // setSleepTimerMinutes clears end-of-episode mode and vice versa. Watched
+  // by AudioEngine, which pauses playback and clears whichever is set once
+  // it fires.
+  sleepTimerEndAt: number | null
+  sleepTimerEndOfEpisode: boolean
+  setSleepTimerMinutes: (minutes: number) => void
+  setSleepTimerEndOfEpisode: () => void
+  clearSleepTimer: () => void
 }
 
 // Never throws — a failed push stays durably queued in the outbox and keeps
@@ -2221,7 +2233,15 @@ export const useStore = create<AppState>((set, get) => {
     const activeQueue = queueSource === 'station' ? stationQueue : queue
     const previousId = previousInQueue(activeQueue, currentEpisodeId)
     if (previousId) loadEpisode(previousId, { autoplay: true })
-  }
+  },
+  pausePlayback: () => set({ playing: false }),
+
+  sleepTimerEndAt: null,
+  sleepTimerEndOfEpisode: false,
+  setSleepTimerMinutes: (minutes) =>
+    set({ sleepTimerEndAt: Date.now() + minutes * 60_000, sleepTimerEndOfEpisode: false }),
+  setSleepTimerEndOfEpisode: () => set({ sleepTimerEndOfEpisode: true, sleepTimerEndAt: null }),
+  clearSleepTimer: () => set({ sleepTimerEndAt: null, sleepTimerEndOfEpisode: false })
   }
 })
 

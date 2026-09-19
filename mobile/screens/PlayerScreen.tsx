@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
+import { View, Text, Pressable, ScrollView, StyleSheet, Modal } from 'react-native'
 import * as Haptics from 'expo-haptics'
-import { ChevronDown, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward } from 'lucide-react-native'
+import { ChevronDown, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward, Moon } from 'lucide-react-native'
 import type { Chapter, Episode, Podcast } from '@shared/types'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
 import { useStore } from '../state/store'
@@ -14,10 +14,16 @@ import { colors, radii } from '../theme'
 import type { LayoutMode } from '../lib/useLayout'
 
 const SPEEDS = [1, 1.25, 1.5, 1.75, 2]
+const SLEEP_TIMER_MINUTES = [5, 15, 30, 45, 60]
 
 function nextSpeed(current: number): number {
   const idx = SPEEDS.indexOf(current)
   return SPEEDS[(idx === -1 ? 0 : idx + 1) % SPEEDS.length]
+}
+
+function formatSleepTimerRemaining(endAt: number): string {
+  const minutesLeft = Math.max(1, Math.ceil((endAt - Date.now()) / 60_000))
+  return `${minutesLeft}m`
 }
 
 function formatTime(sec: number): string {
@@ -64,6 +70,22 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
   const loadEpisode = useStore((s) => s.loadEpisode)
   const playNextInQueue = useStore((s) => s.playNextInQueue)
   const playPreviousInQueue = useStore((s) => s.playPreviousInQueue)
+  const sleepTimerEndAt = useStore((s) => s.sleepTimerEndAt)
+  const sleepTimerEndOfEpisode = useStore((s) => s.sleepTimerEndOfEpisode)
+  const setSleepTimerMinutes = useStore((s) => s.setSleepTimerMinutes)
+  const setSleepTimerEndOfEpisode = useStore((s) => s.setSleepTimerEndOfEpisode)
+  const clearSleepTimer = useStore((s) => s.clearSleepTimer)
+  const [sleepTimerOpen, setSleepTimerOpen] = useState(false)
+  const sleepTimerActive = sleepTimerEndAt !== null || sleepTimerEndOfEpisode
+  // Ticks once a second only while the sheet or an active timer needs a
+  // fresh "Xm left" label — everywhere else this screen re-renders on its
+  // own from playback progress, so a dedicated interval isn't worth it.
+  const [, forceTick] = useState(0)
+  useEffect(() => {
+    if (sleepTimerEndAt === null) return
+    const interval = setInterval(() => forceTick((n) => n + 1), 1000)
+    return () => clearInterval(interval)
+  }, [sleepTimerEndAt])
 
   const { onBarLayout, panHandlers, progress, displayedTimeSec, scrubbing } = useScrubBar({
     duration,
@@ -268,6 +290,61 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
     </Pressable>
   )
 
+  const sleepTimerPill = (
+    <Pressable
+      style={[styles.speedBtn, sleepTimerActive && styles.sleepBtnActive]}
+      onPress={() => setSleepTimerOpen(true)}
+      accessibilityLabel="Sleep timer"
+    >
+      <Moon size={13} color={sleepTimerActive ? '#fff' : colors.textSecondary} />
+      <Text style={[styles.speedText, sleepTimerActive && styles.sleepTextActive]}>
+        {sleepTimerEndOfEpisode ? 'End of episode' : sleepTimerEndAt ? formatSleepTimerRemaining(sleepTimerEndAt) : 'Sleep'}
+      </Text>
+    </Pressable>
+  )
+
+  const sleepTimerModal = (
+    <Modal visible={sleepTimerOpen} animationType="slide" transparent onRequestClose={() => setSleepTimerOpen(false)}>
+      <Pressable style={styles.modalBackdrop} onPress={() => setSleepTimerOpen(false)}>
+        <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+          <Text style={styles.sectionTitle}>Sleep Timer</Text>
+          {SLEEP_TIMER_MINUTES.map((minutes) => (
+            <Pressable
+              key={minutes}
+              style={styles.sleepOption}
+              onPress={() => {
+                setSleepTimerMinutes(minutes)
+                setSleepTimerOpen(false)
+              }}
+            >
+              <Text style={styles.sleepOptionText}>{minutes} minutes</Text>
+            </Pressable>
+          ))}
+          <Pressable
+            style={styles.sleepOption}
+            onPress={() => {
+              setSleepTimerEndOfEpisode()
+              setSleepTimerOpen(false)
+            }}
+          >
+            <Text style={styles.sleepOptionText}>End of episode</Text>
+          </Pressable>
+          {sleepTimerActive && (
+            <Pressable
+              style={styles.sleepOption}
+              onPress={() => {
+                clearSleepTimer()
+                setSleepTimerOpen(false)
+              }}
+            >
+              <Text style={[styles.sleepOptionText, styles.sleepOptionOff]}>Turn Off</Text>
+            </Pressable>
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
+  )
+
   if (isTablet) {
     // Not a modal — it takes over the content area while the sidebar stays
     // visible (App.tsx renders Sidebar as a sibling, unaffected by this
@@ -297,7 +374,11 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
             </Text>
             {scrubber}
             {controls}
-            {speedPill}
+            <View style={styles.pillRow}>
+              {speedPill}
+              {sleepTimerPill}
+            </View>
+            {sleepTimerModal}
             {mode === 'rail' && chaptersSection}
             {mode === 'rail' && description.length > 0 && (
               <View style={styles.descriptionSection}>
@@ -372,7 +453,11 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
 
       {scrubber}
       {controls}
-      {speedPill}
+      <View style={styles.pillRow}>
+        {speedPill}
+        {sleepTimerPill}
+      </View>
+      {sleepTimerModal}
 
       {chaptersSection}
 
@@ -449,14 +534,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center'
   },
+  pillRow: { flexDirection: 'row', alignSelf: 'center', gap: 10 },
   speedBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
     alignSelf: 'center',
     paddingHorizontal: 14,
     paddingVertical: 8,
     backgroundColor: '#e8e8ed',
     borderRadius: radii.pill
   },
+  sleepBtnActive: { backgroundColor: colors.accent },
   speedText: { fontSize: 13, fontWeight: '700', color: colors.textSecondary },
+  sleepTextActive: { color: '#fff' },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end'
+  },
+  modalCard: {
+    backgroundColor: colors.surface,
+    borderTopLeftRadius: radii.modal,
+    borderTopRightRadius: radii.modal,
+    padding: 20,
+    paddingBottom: 32
+  },
+  sleepOption: { paddingVertical: 14, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+  sleepOptionText: { fontSize: 15, color: colors.textPrimary, textAlign: 'center' },
+  sleepOptionOff: { color: colors.danger, fontWeight: '700' },
   descriptionSection: { marginTop: 28 },
   sectionTitle: {
     fontSize: 11,
