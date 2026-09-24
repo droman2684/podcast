@@ -41,6 +41,7 @@ import { getMainWindow } from '../windowRegistry'
 import { getSupabase } from './client'
 import { createDesktopAdapters } from './adapters'
 import { buildRowForKey } from './rowBuilder'
+import { deferPlayed } from './deferredPlayed'
 
 const LEDGER_STORAGE_KEY = 'sync.ledger.v1'
 const OUTBOX_STORAGE_KEY = 'sync.outbox.v1'
@@ -57,6 +58,66 @@ let outbox: Outbox | null = null
 let stopAutoDrain: (() => void) | null = null
 let stopRealtime: (() => void) | null = null
 let hooksInstalled = false
+
+// What this device itself pushed recently, per sync key. Realtime delivers
+// every write back to the device that made it, and when two edits to the
+// same key go out close together (e.g. removing two queue items in a row)
+// the echo of the first can land after the second was already applied —
+// accepting it would briefly roll the queue back and, worse, the window
+// reload that follows could let a further edit build on that stale copy.
+// An incoming row whose synced fields exactly match something we pushed a
+// moment ago is our own echo and is skipped; anything else is a real edit
+// from another device and is applied as usual.
+// Kept short: an echo arrives within a second or two, and a longer window
+// would risk mistaking another device deliberately restoring an earlier
+// value for our own echo.
+const OWN_ECHO_WINDOW_MS = 15_000
+const recentPushes = new Map<string, { fields: Record<string, unknown>; at: number }[]>()
+
+function rememberPush(key: string, row: Record<string, unknown>): void {
+  const now = Date.now()
+  const list = (recentPushes.get(key) ?? []).filter((p) => now - p.at < OWN_ECHO_WINDOW_MS)
+  list.push({ fields: row, at: now })
+  recentPushes.set(key, list.slice(-10))
+}
+
+function isOwnEcho(key: string, row: SyncRow): boolean {
+  const list = recentPushes.get(key)
+  if (!list) return false
+  const now = Date.now()
+  const incoming = row as unknown as Record<string, unknown>
+  return list.some(
+    (p) =>
+      now - p.at < OWN_ECHO_WINDOW_MS &&
+      Object.entries(p.fields).every(([field, value]) => JSON.stringify(incoming[field]) === JSON.stringify(value))
+  )
+}
+
+// The window keeps its own copy of the queue, positions, played flags, etc.,
+// loaded from this process at startup — without this nudge, anything a
+// background pull or realtime event applied here stayed invisible until a
+// restart or a manual "Sync now", and the window's stale copy then got
+// written straight back to the cloud on its next edit (e.g. the whole
+// queue, via QUEUE_SET), overwriting what the other device had done.
+// Debounced so a pull applying hundreds of rows sends one event.
+const DATA_CHANGED_DEBOUNCE_MS = 300
+let pendingTables = new Set<string>()
+let pendingPodcastIds = new Set<string>()
+let dataChangedTimer: ReturnType<typeof setTimeout> | null = null
+
+function noteRemoteChange(table: string, row: SyncRow): void {
+  pendingTables.add(table)
+  const r = row as unknown as Record<string, unknown>
+  if (typeof r.podcast_id === 'string') pendingPodcastIds.add(r.podcast_id)
+  if (dataChangedTimer) return
+  dataChangedTimer = setTimeout(() => {
+    dataChangedTimer = null
+    const payload = { tables: [...pendingTables], podcastIds: [...pendingPodcastIds] }
+    pendingTables = new Set()
+    pendingPodcastIds = new Set()
+    getMainWindow()?.webContents.send(IPC_CHANNELS.SYNC_DATA_CHANGED_EVENT, payload)
+  }, DATA_CHANGED_DEBOUNCE_MS)
+}
 
 function client(): SyncClient | null {
   const real = getSupabase()
@@ -80,13 +141,16 @@ function mirrorIntoSyncUpdatedAt(list: TableDescriptor[]): TableDescriptor[] {
   return list.map((d) => ({
     ...d,
     applyRow: async (row: SyncRow) => {
+      if (isOwnEcho(d.ledgerKey(row), row)) return
       await d.applyRow(row)
       markAppliedFromRemote(d.ledgerKey(row), markerFromUpdatedAt(row))
+      noteRemoteChange(d.table, row)
     },
     applyTombstone: d.applyTombstone
       ? async (row: SyncRow) => {
           await d.applyTombstone!(row)
           markAppliedFromRemote(d.ledgerKey(row), markerFromUpdatedAt(row))
+          noteRemoteChange(d.table, row)
         }
       : undefined
   }))
@@ -147,9 +211,17 @@ function descriptors(snapshot: PersistedData): TableDescriptor[] {
       const podcastId = row.podcast_id
       const episodes = snapshot.episodesByPodcast[podcastId]
       const idx = episodes?.findIndex((e) => e.id === row.episode_id) ?? -1
-      // Podcast/episode not fetched on this device yet — resolves on a
-      // later cycle once it exists, nothing to retry explicitly.
-      if (!episodes || idx === -1) return
+      // Podcast/episode not fetched on this device yet — parked until a
+      // feed refresh brings it in (see deferredPlayed.ts for why it can't
+      // just wait for a later pull).
+      if (!episodes || idx === -1) {
+        deferPlayed(row.episode_id, {
+          podcastId,
+          played: row.played,
+          durationSecOverride: row.duration_sec_override ?? null
+        })
+        return
+      }
       episodes[idx] = {
         ...episodes[idx],
         played: row.played,
@@ -213,6 +285,7 @@ async function pushKey(key: string): Promise<void> {
   if (!userId) return
   const built = buildRowForKey(getSnapshot(), userId, key)
   if (!built) return
+  rememberPush(key, built.row)
   // enqueue() itself never rejects — a failed attempt just stays durably
   // pending for the outbox's own retry (see engine.ts's doc comment).
   await engine.outbox.enqueue(built.table, key, built.row)

@@ -6,7 +6,8 @@ import type {
   SubscriptionUpdatedPayload,
   SyncStatusPayload,
   AuthState,
-  SyncStatePayload
+  SyncStatePayload,
+  SyncDataChangedPayload
 } from '@shared/ipcChannels'
 
 const api: EmpirePodApi = {
@@ -116,6 +117,12 @@ const api: EmpirePodApi = {
         callback(payload)
       ipcRenderer.on(IPC_CHANNELS.SYNC_STATE_EVENT, listener)
       return () => ipcRenderer.removeListener(IPC_CHANNELS.SYNC_STATE_EVENT, listener)
+    },
+    onDataChanged: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: SyncDataChangedPayload): void =>
+        callback(payload)
+      ipcRenderer.on(IPC_CHANNELS.SYNC_DATA_CHANGED_EVENT, listener)
+      return () => ipcRenderer.removeListener(IPC_CHANNELS.SYNC_DATA_CHANGED_EVENT, listener)
     }
   }
 }

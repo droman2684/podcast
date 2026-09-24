@@ -77,7 +77,10 @@ export const IPC_CHANNELS = {
   // Cloud account sync (this app <-> Supabase). Named distinctly from
   // SYNC_STATUS_EVENT above, which is the unrelated "RSS feeds are
   // refreshing" indicator that predates cloud sync entirely.
-  SYNC_STATE_EVENT: 'sync:state'
+  SYNC_STATE_EVENT: 'sync:state',
+  // Main -> renderer: a pull or realtime event changed local data, so the
+  // window should reload the affected slices (see sync/sync.ts).
+  SYNC_DATA_CHANGED_EVENT: 'sync:dataChanged'
 } as const
 
 export interface RefreshResult {
@@ -132,6 +135,13 @@ export interface AuthState {
 }
 
 export type SyncPhase = 'idle' | 'syncing' | 'error'
+
+export interface SyncDataChangedPayload {
+  // Supabase table names that had rows applied.
+  tables: string[]
+  // Podcasts whose episode_played rows changed, so only their episode lists reload.
+  podcastIds: string[]
+}
 
 export interface SyncStatePayload {
   phase: SyncPhase
@@ -214,5 +224,6 @@ export interface EmpirePodApi {
   sync: {
     now(): Promise<void>
     onState(callback: (payload: SyncStatePayload) => void): () => void
+    onDataChanged(callback: (payload: SyncDataChangedPayload) => void): () => void
   }
 }

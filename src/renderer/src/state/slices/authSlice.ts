@@ -1,5 +1,5 @@
 import type { StateCreator } from 'zustand'
-import type { SyncPhase } from '@shared/ipcChannels'
+import type { SyncPhase, SyncDataChangedPayload } from '@shared/ipcChannels'
 import type { AppState } from '../store'
 
 export type AuthStep = 'signedOut' | 'signedIn'
@@ -20,6 +20,7 @@ export interface AuthSlice {
   signIn: (email: string, password: string) => Promise<void>
   signOutOfSync: () => Promise<void>
   syncNow: () => Promise<void>
+  reloadAfterRemoteChange: (payload: SyncDataChangedPayload) => Promise<void>
 }
 
 // Guards module-level (same pattern as initSubscriptionUpdates) so React
@@ -54,6 +55,11 @@ export const createAuthSlice: StateCreator<AppState, [], [], AuthSlice> = (set, 
           syncLastSyncedAt: payload.lastSyncedAt,
           syncError: payload.error ?? null
         })
+      })
+      window.api.sync.onDataChanged((payload) => {
+        get()
+          .reloadAfterRemoteChange(payload)
+          .catch((err) => console.error('Failed to reload after sync:', err))
       })
     }
     const state = await window.api.auth.getState()
@@ -102,5 +108,34 @@ export const createAuthSlice: StateCreator<AppState, [], [], AuthSlice> = (set, 
       get().loadPositions()
     ])
     await Promise.all(get().podcasts.map((p) => get().loadEpisodes(p.id)))
+  },
+
+  // Pushed from main whenever a background pull or realtime event applied
+  // another device's changes (see main/sync/sync.ts noteRemoteChange).
+  // Reloads only what those tables touch rather than everything syncNow
+  // does — realtime can fire this every few seconds while the other device
+  // is playing (position saves), and re-fetching every podcast's episode
+  // list each time would be wasteful.
+  reloadAfterRemoteChange: async ({ tables, podcastIds }) => {
+    const has = (table: string): boolean => tables.includes(table)
+    const episodePodcastIds = new Set(podcastIds)
+    // episode_played also changes each podcast's unread count, which lives
+    // on the podcast list.
+    if (has('podcasts') || has('private_feeds') || has('episode_played')) {
+      const before = new Set(get().podcasts.map((p) => p.id))
+      await get().loadSubscriptions()
+      for (const p of get().podcasts) if (!before.has(p.id)) episodePodcastIds.add(p.id)
+    }
+    const tasks: Promise<void>[] = []
+    if (has('private_feeds')) tasks.push(get().loadPrivateFeeds())
+    if (has('queue')) tasks.push(get().loadQueue())
+    if (has('queue_prefs')) tasks.push(get().loadQueuePrefs())
+    if (has('stations')) tasks.push(get().loadStations())
+    if (has('playback_positions')) tasks.push(get().loadPositions())
+    if (has('podcast_settings')) {
+      for (const id of Object.keys(get().settingsByPodcast)) tasks.push(get().loadPodcastSettings(id))
+    }
+    for (const id of episodePodcastIds) tasks.push(get().loadEpisodes(id))
+    await Promise.all(tasks)
   }
 })

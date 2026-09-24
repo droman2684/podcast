@@ -13,6 +13,7 @@ import { parseFeed, hashId } from './rss'
 import { notify } from './notifications'
 import { getMainWindow } from './windowRegistry'
 import { readOpmlFeedUrls } from './opml'
+import { applyDeferredPlayed } from './sync/deferredPlayed'
 
 // Private feeds are stored as regular podcasts (see privateFeeds.ts) so they
 // show up in the Library like any other subscription — but fetching them
@@ -47,7 +48,8 @@ export async function subscribe(feedUrl: string, isPrivate = false): Promise<Pod
   const existing = snapshot.podcasts[id]
   if (existing) return existing
 
-  const { podcast: parsed, episodes } = await parseFeed(feedUrl, undefined, id)
+  const { podcast: parsed, episodes: parsedEpisodes } = await parseFeed(feedUrl, undefined, id)
+  const episodes = applyDeferredPlayed(parsedEpisodes)
 
   const podcast: Podcast = {
     id,
@@ -170,12 +172,14 @@ export async function refreshPodcast(podcastId: string): Promise<RefreshOutcome>
   const priorById = new Map(priorEpisodes.map((e) => [e.id, e]))
   const newEpisodeIds: string[] = []
 
-  const merged = freshEpisodes.map((fresh) => {
-    const prior = priorById.get(fresh.id)
-    if (prior) return { ...fresh, played: prior.played }
-    newEpisodeIds.push(fresh.id)
-    return fresh
-  })
+  const merged = applyDeferredPlayed(
+    freshEpisodes.map((fresh) => {
+      const prior = priorById.get(fresh.id)
+      if (prior) return { ...fresh, played: prior.played }
+      newEpisodeIds.push(fresh.id)
+      return fresh
+    })
+  )
 
   const podcast: Podcast = {
     ...existing,

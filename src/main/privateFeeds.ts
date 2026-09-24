@@ -10,6 +10,7 @@ import {
 } from './persistence'
 import { parseFeed, hashId } from './rss'
 import { refreshPodcast, type RefreshOutcome } from './subscriptions'
+import { applyDeferredPlayed } from './sync/deferredPlayed'
 
 function toPublic(feed: PersistedPrivateFeed): PrivateFeed {
   return { id: feed.id, name: feed.name, url: feed.url, user: feed.user }
@@ -38,7 +39,8 @@ export async function addPrivateFeed(rawUrl: string, rawUser: string, pass: stri
   const authHeader = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
 
   // Validate the credentials work before persisting anything.
-  const { podcast: parsed, episodes } = await parseFeed(url, authHeader, id)
+  const { podcast: parsed, episodes: parsedEpisodes } = await parseFeed(url, authHeader, id)
+  const episodes = applyDeferredPlayed(parsedEpisodes)
 
   const snapshot = getSnapshot()
   const encryptedPassword = safeStorage.encryptString(pass).toString('base64')
