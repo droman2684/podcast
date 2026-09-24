@@ -1,4 +1,4 @@
-import { Grid2x2, List, ChevronRight, ListOrdered } from 'lucide-react'
+import { Grid2x2, List, ChevronRight } from 'lucide-react'
 import { useAppStore } from '@renderer/state/store'
 import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
 import Pill from '@renderer/components/ui/Pill'
@@ -35,9 +35,8 @@ function LibraryScreen(): React.JSX.Element {
       <div className={styles.header}>
         <div className={styles.title}>Library</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <Pill variant="secondary" onClick={openShowOrderModal}>
-            <ListOrdered size={14} />
-            Show order
+          <Pill variant="ghost" onClick={openShowOrderModal}>
+            Order
           </Pill>
           <div className={styles.toggle}>
             <div

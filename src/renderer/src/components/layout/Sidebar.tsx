@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { useAppStore } from '@renderer/state/store'
 import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
+import { sortPodcastsByShowOrder } from '@shared/queueView'
 import SidebarNavItem from './SidebarNavItem'
 import type { Podcast } from '@renderer/types'
 import styles from './Sidebar.module.css'
@@ -52,7 +53,10 @@ function Sidebar(): React.JSX.Element {
   const nav = useAppStore((s) => s.nav)
   const goTo = useAppStore((s) => s.goTo)
 
-  const podcasts = useAppStore((s) => s.podcasts)
+  const subscribed = useAppStore((s) => s.podcasts)
+  const showOrder = useAppStore((s) => s.showOrder)
+  const podcasts = sortPodcastsByShowOrder(subscribed, showOrder)
+  const openShowOrderModal = useAppStore((s) => s.openShowOrderModal)
   const unsubscribe = useAppStore((s) => s.unsubscribe)
   const importOpml = useAppStore((s) => s.importOpml)
   const syncStatus = useAppStore((s) => s.syncStatus)
@@ -230,6 +234,11 @@ function Sidebar(): React.JSX.Element {
         <div className={styles.subscriptionsHeader}>
           <div className={styles.sectionLabel}>Subscriptions</div>
           <div style={{ display: 'flex', gap: 4 }}>
+            {podcasts.length > 1 && (
+              <div className={styles.exportBtn} onClick={openShowOrderModal} title="Set show order">
+                <ListOrdered size={12} color="#8e8e93" />
+              </div>
+            )}
             <div
               className={styles.exportBtn}
               onClick={handleImportOpml}
