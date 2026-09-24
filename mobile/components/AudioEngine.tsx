@@ -13,6 +13,10 @@ const SAVE_INTERVAL_MS = 3000
 // below — covers streams whose reported duration runs slightly past the
 // last audio frame.
 const END_TOLERANCE_SEC = 1
+// How often / how long the resume-position seeding below waits for the
+// native player to finish loading a newly replaced source.
+const LOAD_POLL_MS = 200
+const LOAD_WAIT_MAX_MS = 15000
 
 // One persistent player for the whole app, mounted once here rather than
 // inside PlayerScreen — mirrors the desktop app's useAudioEngine.ts pattern.
@@ -24,7 +28,6 @@ export default function AudioEngine(): null {
   const playing = useStore((s) => s.playing)
   const seekRequestSec = useStore((s) => s.seekRequestSec)
   const playbackRate = useStore((s) => s.playbackRate)
-  const positions = useStore((s) => s.positions)
   const podcastVolume = useStore((s) => s.podcastVolume)
   const downloadedUris = useStore((s) => s.downloadedUris)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
@@ -54,6 +57,11 @@ export default function AudioEngine(): null {
   const status = useAudioPlayerStatus(player)
   const loadedEpisodeId = useRef<string | null>(null)
   const seededPositionFor = useRef<string | null>(null)
+  // Which episode player.replace() has actually been called for — distinct
+  // from loadedEpisodeId because a private feed's replace() lands only
+  // after an async credential lookup, and until then the native player
+  // still holds (and reports as loaded) the previous episode.
+  const replacedFor = useRef<string | null>(null)
   // Tracked in state (not a ref) so the autoplay effect below re-runs once
   // seeding finishes — it needs to actually see the value change, not just
   // read a mutable ref on some other render.
@@ -144,10 +152,12 @@ export default function AudioEngine(): null {
     const downloadedUri = downloadedUris[episode.id]
     if (downloadedUri) {
       player.replace(downloadedUri)
+      replacedFor.current = episode.id
       return
     }
     if (!podcast?.isPrivate) {
       player.replace(episode.audioUrl)
+      replacedFor.current = episode.id
       return
     }
     getPrivateFeedCredential(podcast.id).then(async (credential) => {
@@ -155,6 +165,7 @@ export default function AudioEngine(): null {
       if (loadedEpisodeId.current !== episode.id) return
       if (!credential) {
         player.replace(episode.audioUrl)
+        replacedFor.current = episode.id
         return
       }
       const authHeader = basicAuthHeader(credential.user, credential.password)
@@ -162,6 +173,7 @@ export default function AudioEngine(): null {
       if (loadedEpisodeId.current !== episode.id) return
       const source: AudioSource = { uri: resolvedUrl, headers: { Authorization: authHeader } }
       player.replace(source)
+      replacedFor.current = episode.id
     })
   }, [episode?.id, episode?.audioUrl, downloadedUris, podcast?.isPrivate, podcast?.id, player])
 
@@ -175,25 +187,61 @@ export default function AudioEngine(): null {
   // between load and this fetch resolving, which on a second device looked
   // like the episode "restarting" right after briefly showing the correct
   // resume position.
+  //
+  // Waits on the native player's own isLoaded (polled) rather than
+  // status.isLoaded: iOS emits no status event on replace(), so right after
+  // an episode ends status.isLoaded is still the *previous* item's `true`,
+  // and it may flip false/true again while the fetch below is in flight.
+  // That flip used to cancel the fetch, and the seededPositionFor guard then
+  // stopped it from ever re-running — seedReadyFor never got set, so the
+  // autoplay effect's gate stayed shut and nothing could play the
+  // auto-advanced episode until the app was restarted.
   useEffect(() => {
-    if (!status.isLoaded || !episode || seededPositionFor.current === episode.id) return
+    if (!episode || seededPositionFor.current === episode.id) return
     seededPositionFor.current = episode.id
     let cancelled = false
+    let done = false
     const episodeId = episode.id
-    fetchLatestPosition(episodeId)
-      .then((remoteSec) => {
-        if (cancelled || loadedEpisodeId.current !== episodeId) return
-        const saved = remoteSec ?? positions[episodeId] ?? 0
-        if (saved > 0) player.seekTo(saved)
-      })
-      .catch(() => {})
-      .finally(() => {
-        if (!cancelled) setSeedReadyFor(episodeId)
-      })
+    const startedAt = Date.now()
+    let poll: ReturnType<typeof setTimeout> | null = null
+    const nativeLoaded = (): boolean => {
+      try {
+        return replacedFor.current === episodeId && player.isLoaded
+      } catch {
+        return false
+      }
+    }
+    const seed = (): void => {
+      if (cancelled) return
+      // A source that never loads (bad URL, offline stream) still gets its
+      // gate opened eventually, so play() can at least be attempted.
+      const timedOut = Date.now() - startedAt > LOAD_WAIT_MAX_MS
+      if (!nativeLoaded() && !timedOut) {
+        poll = setTimeout(seed, LOAD_POLL_MS)
+        return
+      }
+      fetchLatestPosition(episodeId)
+        .then((remoteSec) => {
+          if (cancelled || loadedEpisodeId.current !== episodeId || !nativeLoaded()) return
+          const saved = remoteSec ?? useStore.getState().positions[episodeId] ?? 0
+          if (saved > 0) player.seekTo(saved)
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (cancelled) return
+          done = true
+          setSeedReadyFor(episodeId)
+        })
+    }
+    seed()
     return () => {
       cancelled = true
+      if (poll) clearTimeout(poll)
+      // Interrupted before finishing — let the next run for this same
+      // episode start over instead of bailing on the guard above.
+      if (!done && seededPositionFor.current === episodeId) seededPositionFor.current = null
     }
-  }, [status.isLoaded, episode?.id, player, fetchLatestPosition])
+  }, [episode?.id, player, fetchLatestPosition])
 
   // status.isLoaded is in the deps so autoplay actually takes effect: right
   // after switching episodes, player.replace() has been called but the new
