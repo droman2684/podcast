@@ -43,6 +43,29 @@ index 839aaef..1e3d80b 100644
        }
      }
      return super.onCustomCommand(session, controller, command, args)
+diff --git a/node_modules/expo-audio/ios/AudioPlayer.swift b/node_modules/expo-audio/ios/AudioPlayer.swift
+index 1dbce09..34756b6 100644
+--- a/node_modules/expo-audio/ios/AudioPlayer.swift
++++ b/node_modules/expo-audio/ios/AudioPlayer.swift
+@@ -162,6 +162,18 @@ public class AudioPlayer: SharedRef<AVPlayer> {
+       }
+       .store(in: &cancellables)
+ 
++    // Emit a status update whenever play/pause state changes, not only on
++    // time ticks — an audio-session interruption (another app starting
++    // playback), a route change, or a lock-screen command pauses the
++    // AVPlayer natively, and without this JS may never hear about it.
++    ref.publisher(for: \.timeControlStatus)
++      .removeDuplicates()
++      .dropFirst()
++      .sink { [weak self] _ in
++        self?.updateStatus(with: [:])
++      }
++      .store(in: &cancellables)
++
+     ref.publisher(for: \.currentItem)
+       .sink { [weak self] _ in
+         guard let self else {
 diff --git a/node_modules/expo-audio/ios/MediaController.swift b/node_modules/expo-audio/ios/MediaController.swift
 index 2dd3fb2..d4aa747 100644
 --- a/node_modules/expo-audio/ios/MediaController.swift

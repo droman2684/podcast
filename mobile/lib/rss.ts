@@ -1,6 +1,6 @@
 import { XMLParser } from 'fast-xml-parser'
 import type { Episode } from '@shared/types'
-import { hashId } from './hash'
+import { hashIdSync } from './hash'
 import { decodeHtmlEntities } from './stripHtml'
 
 // A separate parser from the desktop app's (src/main/rss.ts, which uses
@@ -73,33 +73,27 @@ export async function parseFeed(feedUrl: string, podcastId: string, authHeader?:
       ? [rawItems]
       : []
 
-  // hashId() is a native crypto bridge call — awaiting it one item at a time
-  // meant a show with hundreds of episodes made hundreds of sequential
-  // round-trips to parse a single feed. Running them concurrently instead
-  // was the single biggest win for how long the library took to load.
-  const episodes = (
-    await Promise.all(
-      items.map(async (item) => {
-        const enclosureUrl = attr(item.enclosure, 'url') ?? ''
-        const guid = text(item.guid) || text(item.link) || enclosureUrl || text(item.title)
-        if (!guid || !enclosureUrl) return null
-        const id = await hashId(guid)
-        const episode: Episode = {
-          id,
-          podcastId,
-          title: text(item.title),
-          description: text(item.description) || text(item['itunes:summary']),
-          audioUrl: enclosureUrl,
-          artworkUrl: attr(item['itunes:image'], 'href'),
-          durationSec: parseItunesDuration(item['itunes:duration']),
-          pubDateIso: item.pubDate ? new Date(text(item.pubDate)).toISOString() : new Date(0).toISOString(),
-          played: false,
-          chaptersUrl: attr(item['podcast:chapters'], 'url') ?? null
-        }
-        return episode
-      })
-    )
-  ).filter((e): e is Episode => e !== null)
+  // Hashed synchronously in JS (see hash.ts) — this used to be one native
+  // crypto bridge call per item, which for a library of large feeds meant
+  // thousands of in-flight round-trips on every launch.
+  const episodes: Episode[] = []
+  for (const item of items) {
+    const enclosureUrl = attr(item.enclosure, 'url') ?? ''
+    const guid = text(item.guid) || text(item.link) || enclosureUrl || text(item.title)
+    if (!guid || !enclosureUrl) continue
+    episodes.push({
+      id: hashIdSync(guid),
+      podcastId,
+      title: text(item.title),
+      description: text(item.description) || text(item['itunes:summary']),
+      audioUrl: enclosureUrl,
+      artworkUrl: attr(item['itunes:image'], 'href'),
+      durationSec: parseItunesDuration(item['itunes:duration']),
+      pubDateIso: item.pubDate ? new Date(text(item.pubDate)).toISOString() : new Date(0).toISOString(),
+      played: false,
+      chaptersUrl: attr(item['podcast:chapters'], 'url') ?? null
+    })
+  }
 
   return {
     name: text(channel.title),

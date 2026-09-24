@@ -220,6 +220,31 @@ async function saveLocalDownloadedSnapshots(snapshots: Record<string, Downloaded
   }
 }
 
+// Every snapshot edit is a read-modify-write of one AsyncStorage blob, and
+// auto-downloads run two at a time — unserialized, two downloads finishing
+// together would each read the same old blob and the second save would
+// silently drop the first's entry. Chaining them keeps each edit applied on
+// top of the previous one. `mutate` returns false to skip the save when it
+// changed nothing.
+let snapshotWriteChain: Promise<void> = Promise.resolve()
+function updateLocalDownloadedSnapshots(
+  mutate: (snapshots: Record<string, DownloadedSnapshot>) => boolean | void
+): Promise<void> {
+  snapshotWriteChain = snapshotWriteChain.then(async () => {
+    const snapshots = await loadLocalDownloadedSnapshots()
+    if (mutate(snapshots) === false) return
+    await saveLocalDownloadedSnapshots(snapshots)
+  })
+  return snapshotWriteChain
+}
+
+// Minimum gap between downloadProgress store updates for any one download.
+// The native progress callback fires on every received chunk — many times a
+// second — and every update re-rendered the whole Downloads/Queue list; with
+// two auto-downloads running on launch that flood was enough to lock up the
+// JS thread and eventually get the app killed.
+const DOWNLOAD_PROGRESS_THROTTLE_MS = 500
+
 // Local durable cache of user Categories/Stations, mirroring the queue/
 // positions caches above — upsertStation's outbox write can lose a race with
 // the app closing (or just not have drained yet), and loadStations' pull
@@ -690,6 +715,7 @@ async function upsertStation(userId: string, station: Station): Promise<void> {
 }
 
 const FEED_FETCH_CONCURRENCY = 5
+const FEED_MERGE_BATCH_MS = 300
 
 // A rolling worker pool rather than fixed-size batches: `mapWithConcurrency`
 // used to await Promise.all() on a batch of `limit` items before starting
@@ -1121,23 +1147,46 @@ export const useStore = create<AppState>((set, get) => {
       // behind a blank spinner until even the single slowest podcast's feed
       // had loaded. Re-sorted by original subscription order each time so
       // the grid doesn't reshuffle as results race in out of order.
-      const mergeFeed = (result: { podcast: Podcast; episodes: Episode[] } | null): void => {
-        if (!result) return
+      // Feeds that land within FEED_MERGE_BATCH_MS of each other are
+      // committed in one set() rather than one each: every commit replaces
+      // episodesByPodcast, which makes every subscriber (AudioEngine, App,
+      // the Queue list...) rebuild its whole-library episode index — once per
+      // podcast on launch, right while auto-downloads were also starting.
+      const pendingFeeds: { podcast: Podcast; episodes: Episode[] }[] = []
+      let feedFlushTimer: ReturnType<typeof setTimeout> | null = null
+      const flushFeeds = (): void => {
+        if (feedFlushTimer) {
+          clearTimeout(feedFlushTimer)
+          feedFlushTimer = null
+        }
+        if (pendingFeeds.length === 0) return
+        const batch = pendingFeeds.splice(0)
+        const batchIds = new Set(batch.map((r) => r.podcast.id))
         set((state) => {
           // Keeps the durable artwork cache aligned with whatever actually
           // lands in `podcasts` (a freshly-accepted server value, or the
           // fallback computed above) so a stale local override doesn't
           // linger forever once the real state is known.
-          const overrides = { ...state.customArtworkOverrides, [result.podcast.id]: result.podcast.customArtworkUrl }
+          const overrides = { ...state.customArtworkOverrides }
+          const episodesByPodcast = { ...state.episodesByPodcast }
+          for (const r of batch) {
+            overrides[r.podcast.id] = r.podcast.customArtworkUrl
+            episodesByPodcast[r.podcast.id] = r.episodes
+          }
           saveLocalArtwork(overrides).catch(() => {})
           return {
-            podcasts: [...state.podcasts.filter((p) => p.id !== result.podcast.id), result.podcast].sort(
+            podcasts: [...state.podcasts.filter((p) => !batchIds.has(p.id)), ...batch.map((r) => r.podcast)].sort(
               (a, b) => (rowOrder.get(a.id) ?? 0) - (rowOrder.get(b.id) ?? 0)
             ),
-            episodesByPodcast: { ...state.episodesByPodcast, [result.podcast.id]: result.episodes },
+            episodesByPodcast,
             customArtworkOverrides: overrides
           }
         })
+      }
+      const mergeFeed = (result: { podcast: Podcast; episodes: Episode[] } | null): void => {
+        if (!result) return
+        pendingFeeds.push(result)
+        if (!feedFlushTimer) feedFlushTimer = setTimeout(flushFeeds, FEED_MERGE_BATCH_MS)
       }
 
       // A podcast with no entry yet in `lastSeen` is being loaded on this
@@ -1272,6 +1321,7 @@ export const useStore = create<AppState>((set, get) => {
         },
         mergeFeed
       )
+      flushFeeds()
 
       set({ privateFeedsMissingCredential: missingCredential })
 
@@ -1977,12 +2027,11 @@ export const useStore = create<AppState>((set, get) => {
     // Drop any snapshot whose file no longer exists (e.g. removed while this
     // device was offline/closed, so removeDownload's own prune below never
     // ran for it) — same reconciliation idea as downloadOrder above.
-    const snapshots = await loadLocalDownloadedSnapshots()
-    const staleIds = Object.keys(snapshots).filter((id) => !downloadedUris[id])
-    if (staleIds.length > 0) {
+    await updateLocalDownloadedSnapshots((snapshots) => {
+      const staleIds = Object.keys(snapshots).filter((id) => !downloadedUris[id])
+      if (staleIds.length === 0) return false
       for (const id of staleIds) delete snapshots[id]
-      await saveLocalDownloadedSnapshots(snapshots)
-    }
+    })
   },
 
   downloadEpisode: async (episode) => {
@@ -1995,7 +2044,16 @@ export const useStore = create<AppState>((set, get) => {
         const credential = await getPrivateFeedCredential(episode.podcastId)
         if (credential) authHeader = basicAuthHeader(credential.user, credential.password)
       }
+      // Throttled — see DOWNLOAD_PROGRESS_THROTTLE_MS. Only whole-percent
+      // changes count, so a stalled download doesn't keep re-rendering either.
+      let lastReportedAt = 0
+      let lastReportedPct = -1
       const uri = await downloadEpisodeFile(episode.id, episode.audioUrl, authHeader, (fraction) => {
+        const now = Date.now()
+        const pct = Math.floor(fraction * 100)
+        if (pct === lastReportedPct || now - lastReportedAt < DOWNLOAD_PROGRESS_THROTTLE_MS) return
+        lastReportedAt = now
+        lastReportedPct = pct
         set((state) => ({ downloadProgress: { ...state.downloadProgress, [episode.id]: fraction } }))
       })
       set((state) => ({ downloadedUris: { ...state.downloadedUris, [episode.id]: uri } }))
@@ -2011,9 +2069,9 @@ export const useStore = create<AppState>((set, get) => {
       // (shouldn't normally happen — downloading requires an already-loaded
       // episode) there's nothing to snapshot, so just skip it.
       if (podcast) {
-        const snapshots = await loadLocalDownloadedSnapshots()
-        snapshots[episode.id] = { episode, podcast }
-        await saveLocalDownloadedSnapshots(snapshots)
+        await updateLocalDownloadedSnapshots((snapshots) => {
+          snapshots[episode.id] = { episode, podcast }
+        })
       }
       // Downloading an episode is a strong enough "I want to listen to this"
       // signal to also queue it — mirrors loadLibrary's auto-download-new-
@@ -2046,10 +2104,9 @@ export const useStore = create<AppState>((set, get) => {
       void saveLocalDownloadOrder(nextOrder)
     }
     if (get().queue.includes(episodeId)) get().removeFromQueue(episodeId)
-    void loadLocalDownloadedSnapshots().then((snapshots) => {
-      if (!(episodeId in snapshots)) return
+    void updateLocalDownloadedSnapshots((snapshots) => {
+      if (!(episodeId in snapshots)) return false
       delete snapshots[episodeId]
-      return saveLocalDownloadedSnapshots(snapshots)
     })
   },
 

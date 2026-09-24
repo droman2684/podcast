@@ -8,6 +8,10 @@ import { buildEpisodeIndex } from '../lib/episodeIndex'
 import { getPrivateFeedCredential, basicAuthHeader, resolvePrivateStreamUrl } from '../lib/privateFeedCredentials'
 
 const SAVE_INTERVAL_MS = 3000
+// How close to the end counts as "finished" for the fallback end detector
+// below — covers streams whose reported duration runs slightly past the
+// last audio frame.
+const END_TOLERANCE_SEC = 1
 
 // One persistent player for the whole app, mounted once here rather than
 // inside PlayerScreen — mirrors the desktop app's useAudioEngine.ts pattern.
@@ -54,6 +58,11 @@ export default function AudioEngine(): null {
   // read a mutable ref on some other render.
   const [seedReadyFor, setSeedReadyFor] = useState<string | null>(null)
   const finishedFor = useRef<string | null>(null)
+  // Which episode the native player has actually been seen playing since it
+  // was loaded — gates the fallback end detector so a stale "at the end"
+  // status left over from the previous episode can't mark the next one
+  // finished before it has even started.
+  const sawPlayingFor = useRef<string | null>(null)
   const prevDidJustFinish = useRef(false)
 
   // Kept in a ref (rather than read from `status.currentTime` directly)
@@ -81,9 +90,33 @@ export default function AudioEngine(): null {
     if (id && t > 0) savePosition(id, t)
   }
 
+  // doNotMix explicitly: expo-audio's native default is mixWithOthers, which
+  // (a) isn't a podcast app's behavior and (b) left the session category
+  // flip-flopping against MediaController's lock-screen patch, which forces
+  // a non-mixable .playback category every time an episode loads.
   useEffect(() => {
-    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true }).catch(() => {})
+    setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' }).catch(
+      () => {}
+    )
   }, [])
+
+  // play() re-activates the audio session natively and throws if that
+  // fails — which can happen right after another app has taken the session
+  // over. Previously that throw escaped the effect and the tap was simply
+  // lost; now it re-asserts the audio mode and retries once.
+  const safePlay = (): void => {
+    try {
+      player.play()
+    } catch (err) {
+      console.error('[audio] play() failed, re-activating session:', err)
+      setAudioModeAsync({ playsInSilentMode: true, shouldPlayInBackground: true, interruptionMode: 'doNotMix' })
+        .then(() => player.play())
+        .catch((retryErr) => {
+          console.error('[audio] play() retry failed:', retryErr)
+          pausePlayback()
+        })
+    }
+  }
 
   // useAudioPlayer's source argument is only read on the player's initial
   // creation — later changes must go through player.replace(), which is
@@ -103,6 +136,10 @@ export default function AudioEngine(): null {
     // periodic save.
     flushPositionRef.current()
     loadedEpisodeId.current = episode.id
+    // Replaying an episode that already finished once this session must be
+    // able to finish (and auto-advance) again.
+    finishedFor.current = null
+    sawPlayingFor.current = null
     const downloadedUri = downloadedUris[episode.id]
     if (downloadedUri) {
       player.replace(downloadedUri)
@@ -169,9 +206,56 @@ export default function AudioEngine(): null {
   // a chance to run.
   useEffect(() => {
     if (episode?.id && seedReadyFor !== episode.id) return
-    if (playing) player.play()
+    if (playing) safePlay()
     else player.pause()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, episode?.id, status.isLoaded, player, seedReadyFor])
+
+  // Native -> store sync. iOS pauses the player on its own when another app
+  // takes over audio (or headphones unplug, or the lock screen's pause is
+  // used), but `playing` in the store stayed true — so the UI still showed a
+  // pause button, and the first tap after coming back sent a *pause* to an
+  // already-paused player: it looked like the app ignored play entirely.
+  // Edge-triggered on status.playing so it only reacts to an actual change,
+  // and skipped while buffering (a stall isn't a pause) or while an episode
+  // switch/seed is still in flight (replace() pauses natively too).
+  const prevStatusPlaying = useRef(false)
+  useEffect(() => {
+    const was = prevStatusPlaying.current
+    prevStatusPlaying.current = status.playing
+    if (status.playing && episode?.id && loadedEpisodeId.current === episode.id && seedReadyFor === episode.id) {
+      sawPlayingFor.current = episode.id
+    }
+    if (was === status.playing) return
+    if (!episode || loadedEpisodeId.current !== episode.id || seedReadyFor !== episode.id) return
+    if (status.isBuffering) return
+    const atEnd = status.duration > 0 && status.currentTime >= status.duration - END_TOLERANCE_SEC
+    const storePlaying = useStore.getState().playing
+    if (!status.playing && storePlaying && !atEnd) pausePlayback()
+    else if (status.playing && !storePlaying) useStore.setState({ playing: true })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status.playing, status.isBuffering, episode?.id, seedReadyFor, pausePlayback])
+
+  // Same reconciliation on returning to the foreground, reading the native
+  // player directly — status events emitted while the app was suspended
+  // aren't guaranteed to have been delivered.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return
+      const id = useStore.getState().currentEpisodeId
+      if (!id || loadedEpisodeId.current !== id) return
+      let nativePlaying: boolean
+      let nativeBuffering: boolean
+      try {
+        nativePlaying = player.playing
+        nativeBuffering = player.isBuffering
+      } catch {
+        return
+      }
+      if (useStore.getState().playing && !nativePlaying && !nativeBuffering) pausePlayback()
+    })
+    return () => subscription.remove()
+  }, [player, pausePlayback])
 
   // Flushes on every playing -> paused transition, keyed only on `playing`
   // itself (not episode?.id) so this doesn't also fire — using the wrong
@@ -199,13 +283,24 @@ export default function AudioEngine(): null {
   // from where you scrubbed to, not from a few seconds before it.
   useEffect(() => {
     if (seekRequestSec === null) return
-    player.seekTo(seekRequestSec)
+    // Skip-forward near the end requests exactly `duration`. Seeking an
+    // AVPlayer to its very last frame doesn't reliably produce an
+    // end-of-item event, so stop just short and let playback run out
+    // naturally (the end detector below also catches it if it doesn't).
+    const duration = status.duration
+    const target =
+      duration > END_TOLERANCE_SEC ? Math.min(seekRequestSec, duration - END_TOLERANCE_SEC / 2) : seekRequestSec
+    player.seekTo(target)
     clearSeekRequest()
+    // Scrubbing back into an episode that already finished lets it finish
+    // (and auto-advance) again.
+    if (duration <= 0 || target < duration - END_TOLERANCE_SEC) finishedFor.current = null
     const id = loadedEpisodeId.current
-    if (id && seekRequestSec > 0) {
-      currentTimeRef.current = seekRequestSec
-      savePosition(id, seekRequestSec)
+    if (id && target > 0) {
+      currentTimeRef.current = target
+      savePosition(id, target)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seekRequestSec, player, clearSeekRequest, savePosition])
 
   useEffect(() => {
@@ -250,7 +345,19 @@ export default function AudioEngine(): null {
       // show controls."
       console.error('[lockscreen] setActiveForLockScreen failed:', err)
     }
-  }, [status.isLoaded, episode?.id, episode?.title, episode?.artworkUrl, podcast?.name, podcast?.artworkUrl, player])
+    // `playing` included so Now Playing / remote commands are re-claimed
+    // whenever playback resumes — another app that played in the meantime
+    // owns the lock-screen controls until we assert them again.
+  }, [
+    status.isLoaded,
+    playing,
+    episode?.id,
+    episode?.title,
+    episode?.artworkUrl,
+    podcast?.name,
+    podcast?.artworkUrl,
+    player
+  ])
 
   // Depends only on `playing` and episode?.id — NOT status.currentTime or
   // the `episode` object. Both of those change on essentially every
@@ -280,10 +387,28 @@ export default function AudioEngine(): null {
   // episode as finished too, and the one after that, cascading through and
   // emptying the entire queue in one burst every time a single episode
   // actually finished.
+  //
+  // didJustFinish is also only a one-event pulse, and useAudioPlayerStatus
+  // is a plain setState per native event — when the end-of-item event lands
+  // right alongside another (e.g. the seek-complete event after skipping
+  // forward past the last few minutes), React batches them and the pulse is
+  // never rendered, so the episode just sat at the end without advancing.
+  // The fallback below catches that: the player stopped at the end while
+  // the store still wants playback, for an episode that was actually seen
+  // playing after it loaded (see sawPlayingFor).
   useEffect(() => {
     const justFinished = status.didJustFinish && !prevDidJustFinish.current
     prevDidJustFinish.current = status.didJustFinish
-    if (!justFinished || !episode || finishedFor.current === episode.id) return
+    const stoppedAtEnd =
+      !!episode &&
+      playing &&
+      !status.playing &&
+      !status.isBuffering &&
+      sawPlayingFor.current === episode.id &&
+      loadedEpisodeId.current === episode.id &&
+      status.duration > 0 &&
+      status.currentTime >= status.duration - END_TOLERANCE_SEC
+    if (!(justFinished || stoppedAtEnd) || !episode || finishedFor.current === episode.id) return
     finishedFor.current = episode.id
     savePosition(episode.id, 0)
     setPlayed(episode.id, episode.podcastId, true)
@@ -312,8 +437,16 @@ export default function AudioEngine(): null {
       return
     }
     if (nextId) loadEpisode(nextId, { autoplay: true })
+    // Nothing left to advance to — reflect that the player has stopped
+    // rather than leaving the UI showing a pause button over a dead player.
+    else pausePlayback()
   }, [
     status.didJustFinish,
+    status.playing,
+    status.isBuffering,
+    status.currentTime,
+    status.duration,
+    playing,
     episode,
     queue,
     stationQueue,
