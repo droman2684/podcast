@@ -1,8 +1,10 @@
-import type { Episode } from './types'
+import type { Episode, Podcast } from './types'
 
-export type QueueSortMode = 'manual' | 'newest' | 'oldest' | 'shortest' | 'longest'
+// 'show' = the user's show ranking (QueuePrefs.showOrder), then oldest
+// episode first within a show — the desktop equivalent of mobile's Auto mode.
+export type QueueSortMode = 'manual' | 'show' | 'newest' | 'oldest' | 'shortest' | 'longest'
 
-export const QUEUE_SORT_MODES: QueueSortMode[] = ['manual', 'newest', 'oldest', 'shortest', 'longest']
+export const QUEUE_SORT_MODES: QueueSortMode[] = ['manual', 'show', 'newest', 'oldest', 'shortest', 'longest']
 
 export type QueueViewMode = 'grid' | 'list'
 
@@ -10,6 +12,9 @@ export interface QueuePrefs {
   sortMode: QueueSortMode
   groupByShow: boolean
   queueView: QueueViewMode
+  // Podcast ids, first = top. Device-local: queue_prefs' synced row only
+  // carries the three fields above, so this never leaves the machine.
+  showOrder?: string[]
 }
 
 export const DEFAULT_QUEUE_PREFS: QueuePrefs = {
@@ -18,10 +23,38 @@ export const DEFAULT_QUEUE_PREFS: QueuePrefs = {
   queueView: 'list'
 }
 
-export function sortEpisodes(episodes: Episode[], mode: QueueSortMode): Episode[] {
+// Podcasts in the user's chosen show order, with any show not in that list
+// yet (subscribed since it was last edited) appended afterwards in its
+// existing subscription order.
+export function sortPodcastsByShowOrder(podcasts: Podcast[], showOrder: string[]): Podcast[] {
+  if (showOrder.length === 0) return podcasts
+  const rank = new Map(showOrder.map((id, i) => [id, i]))
+  return podcasts
+    .map((p, i) => ({ p, i }))
+    .sort(
+      (a, b) => (rank.get(a.p.id) ?? showOrder.length + a.i) - (rank.get(b.p.id) ?? showOrder.length + b.i)
+    )
+    .map(({ p }) => p)
+}
+
+// `orderedPodcasts` is only consulted for 'show' mode (pass the result of
+// sortPodcastsByShowOrder). Sorts are stable, so ties keep queue order.
+export function sortEpisodes(
+  episodes: Episode[],
+  mode: QueueSortMode,
+  orderedPodcasts: Podcast[] = []
+): Episode[] {
   if (mode === 'manual') return episodes
   const sorted = [...episodes]
   switch (mode) {
+    case 'show': {
+      const rank = new Map(orderedPodcasts.map((p, i) => [p.id, i]))
+      const r = (e: Episode): number => rank.get(e.podcastId) ?? Number.MAX_SAFE_INTEGER
+      sorted.sort(
+        (a, b) => r(a) - r(b) || (a.pubDateIso < b.pubDateIso ? -1 : a.pubDateIso > b.pubDateIso ? 1 : 0)
+      )
+      break
+    }
     case 'newest':
       sorted.sort((a, b) => (a.pubDateIso < b.pubDateIso ? 1 : -1))
       break

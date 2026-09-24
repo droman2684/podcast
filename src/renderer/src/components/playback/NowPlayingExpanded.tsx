@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ChevronDown, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward } from 'lucide-react'
 import { useAppStore } from '@renderer/state/store'
+import { getEffectiveQueue } from '@renderer/utils/queueOrder'
 import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
 import EpisodeArtwork from '@renderer/components/ui/EpisodeArtwork'
 import { formatSeconds, formatRemaining } from '@renderer/utils/duration'
@@ -18,7 +19,8 @@ function NowPlayingExpanded(): React.JSX.Element | null {
   const sidebarW = useAppStore((s) => s.sidebarW)
   const podcasts = useAppStore((s) => s.podcasts)
   const episodesByPodcast = useAppStore((s) => s.episodesByPodcast)
-  const queue = useAppStore((s) => s.queue)
+  // Playback order (the chosen sort, or manual) — see getEffectiveQueue.
+  const queue = useAppStore(getEffectiveQueue)
   const currentEpisodeId = useAppStore((s) => s.currentEpisodeId)
   const playing = useAppStore((s) => s.playing)
   const currentTimeSec = useAppStore((s) => s.currentTimeSec)

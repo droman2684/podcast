@@ -6,12 +6,14 @@ import Pill from '@renderer/components/ui/Pill'
 import SectionLabel from '@renderer/components/ui/SectionLabel'
 import { formatDurationLabel } from '@renderer/utils/duration'
 import { computeProgress } from '@renderer/utils/progress'
-import { sortEpisodes, groupByPodcast, type QueueSortMode } from '@shared/queueView'
+import { groupByPodcast, type QueueSortMode } from '@shared/queueView'
+import { getEffectiveQueue } from '@renderer/utils/queueOrder'
 import type { Episode } from '@renderer/types'
 import styles from './QueueScreen.module.css'
 
 const SORT_OPTIONS: { value: QueueSortMode; label: string }[] = [
   { value: 'manual', label: 'Manual (drag order)' },
+  { value: 'show', label: 'Show order — oldest first' },
   { value: 'newest', label: 'Date — newest first' },
   { value: 'oldest', label: 'Date — oldest first' },
   { value: 'shortest', label: 'Length — shortest first' },
@@ -19,7 +21,8 @@ const SORT_OPTIONS: { value: QueueSortMode; label: string }[] = [
 ]
 
 function QueueScreen(): React.JSX.Element {
-  const queue = useAppStore((s) => s.queue)
+  // Already in the chosen sort order — the same order playback walks.
+  const queue = useAppStore(getEffectiveQueue)
   const podcasts = useAppStore((s) => s.podcasts)
   const episodesByPodcast = useAppStore((s) => s.episodesByPodcast)
   const queueDragId = useAppStore((s) => s.queueDragId)
@@ -32,6 +35,7 @@ function QueueScreen(): React.JSX.Element {
   const setSortMode = useAppStore((s) => s.setQueueSortMode)
   const groupByShow = useAppStore((s) => s.queueGroupByShow)
   const setGroupByShow = useAppStore((s) => s.setQueueGroupByShow)
+  const openShowOrderModal = useAppStore((s) => s.openShowOrderModal)
   const reorderQueue = useAppStore((s) => s.reorderQueue)
   const removeFromQueue = useAppStore((s) => s.removeFromQueue)
   const clearQueue = useAppStore((s) => s.clearQueue)
@@ -58,7 +62,7 @@ function QueueScreen(): React.JSX.Element {
   const allEpisodes = Object.values(episodesByPodcast).flat()
   const episodeById = Object.fromEntries(allEpisodes.map((e) => [e.id, e]))
 
-  // The canonical playback order. Note this can be a strict subset of the
+  // The playback order (sorted per sortMode — see getEffectiveQueue). Note this can be a strict subset of the
   // real queue array — a queue id that no longer resolves to a loaded
   // episode (e.g. its podcast was unsubscribed) is silently dropped here.
   // Reordering must never rely on this list's *positions* lining up with
@@ -72,7 +76,7 @@ function QueueScreen(): React.JSX.Element {
 
   const filtered =
     filterPodcastId === 'all' ? items : items.filter((e) => e.podcastId === filterPodcastId)
-  const visible = sortEpisodes(filtered, sortMode)
+  const visible = filtered
 
   // Manual reordering (drag-and-drop) is only offered when the view is
   // showing the raw queue order 1:1 — any filter, sort, or grouping means a
@@ -332,6 +336,12 @@ function QueueScreen(): React.JSX.Element {
               </option>
             ))}
           </select>
+
+          {sortMode === 'show' && (
+            <Pill variant="ghost" onClick={openShowOrderModal}>
+              Edit show order
+            </Pill>
+          )}
 
           <label className={styles.groupLabel}>
             <input

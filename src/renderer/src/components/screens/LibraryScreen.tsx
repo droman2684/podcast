@@ -1,13 +1,19 @@
 import { Grid2x2, List, ChevronRight } from 'lucide-react'
 import { useAppStore } from '@renderer/state/store'
 import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
+import Pill from '@renderer/components/ui/Pill'
+import { sortPodcastsByShowOrder } from '@shared/queueView'
 import styles from './LibraryScreen.module.css'
 
 function LibraryScreen(): React.JSX.Element {
   const libraryView = useAppStore((s) => s.libraryView)
   const setLibraryView = useAppStore((s) => s.setLibraryView)
   const goTo = useAppStore((s) => s.goTo)
-  const podcasts = useAppStore((s) => s.podcasts)
+  const subscribed = useAppStore((s) => s.podcasts)
+  const showOrder = useAppStore((s) => s.showOrder)
+  const openShowOrderModal = useAppStore((s) => s.openShowOrderModal)
+  // Listed in the user's show ranking (see ShowOrderModal).
+  const podcasts = sortPodcastsByShowOrder(subscribed, showOrder)
 
   const openPodcast = (id: string): void => goTo('episode', id)
 
@@ -28,26 +34,31 @@ function LibraryScreen(): React.JSX.Element {
     <div className={styles.screen}>
       <div className={styles.header}>
         <div className={styles.title}>Library</div>
-        <div className={styles.toggle}>
-          <div
-            className={styles.toggleBtn}
-            style={{
-              background: libraryView === 'grid' ? '#fff' : 'transparent',
-              boxShadow: libraryView === 'grid' ? '0 1px 3px rgba(0,0,0,.12)' : 'none'
-            }}
-            onClick={() => setLibraryView('grid')}
-          >
-            <Grid2x2 size={14} color={libraryView === 'grid' ? 'var(--color-accent)' : '#aeaeb2'} />
-          </div>
-          <div
-            className={styles.toggleBtn}
-            style={{
-              background: libraryView === 'list' ? '#fff' : 'transparent',
-              boxShadow: libraryView === 'list' ? '0 1px 3px rgba(0,0,0,.12)' : 'none'
-            }}
-            onClick={() => setLibraryView('list')}
-          >
-            <List size={14} color={libraryView === 'list' ? 'var(--color-accent)' : '#aeaeb2'} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Pill variant="ghost" onClick={openShowOrderModal}>
+            Order
+          </Pill>
+          <div className={styles.toggle}>
+            <div
+              className={styles.toggleBtn}
+              style={{
+                background: libraryView === 'grid' ? '#fff' : 'transparent',
+                boxShadow: libraryView === 'grid' ? '0 1px 3px rgba(0,0,0,.12)' : 'none'
+              }}
+              onClick={() => setLibraryView('grid')}
+            >
+              <Grid2x2 size={14} color={libraryView === 'grid' ? 'var(--color-accent)' : '#aeaeb2'} />
+            </div>
+            <div
+              className={styles.toggleBtn}
+              style={{
+                background: libraryView === 'list' ? '#fff' : 'transparent',
+                boxShadow: libraryView === 'list' ? '0 1px 3px rgba(0,0,0,.12)' : 'none'
+              }}
+              onClick={() => setLibraryView('list')}
+            >
+              <List size={14} color={libraryView === 'list' ? 'var(--color-accent)' : '#aeaeb2'} />
+            </div>
           </div>
         </div>
       </div>
@@ -57,7 +68,11 @@ function LibraryScreen(): React.JSX.Element {
           {podcasts.map((p) => (
             <div className={styles.gridCard} key={p.id} onClick={() => openPodcast(p.id)}>
               <div style={{ position: 'relative' }}>
-                <PodcastArtwork artworkUrl={p.customArtworkUrl ?? p.artworkUrl} fallbackLabel={p.name} size="fill" />
+                <PodcastArtwork
+                  artworkUrl={p.customArtworkUrl ?? p.artworkUrl}
+                  fallbackLabel={p.name}
+                  size="fill"
+                />
                 {p.unread > 0 && <div className={styles.gridBadge}>{p.unread}</div>}
               </div>
               <div className={styles.gridName}>{p.name}</div>
@@ -69,7 +84,12 @@ function LibraryScreen(): React.JSX.Element {
         <div className={styles.list}>
           {podcasts.map((p) => (
             <div className={styles.listRow} key={p.id} onClick={() => openPodcast(p.id)}>
-              <PodcastArtwork artworkUrl={p.customArtworkUrl ?? p.artworkUrl} fallbackLabel={p.name} size={48} radius={9} />
+              <PodcastArtwork
+                artworkUrl={p.customArtworkUrl ?? p.artworkUrl}
+                fallbackLabel={p.name}
+                size={48}
+                radius={9}
+              />
               <div className={styles.listMeta}>
                 <div className={styles.listName}>{p.name}</div>
                 <div className={styles.listAuthor}>{p.author}</div>

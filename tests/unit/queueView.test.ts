@@ -1,6 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { sortEpisodes, groupByPodcast, nextInQueue, previousInQueue } from '../../src/shared/queueView'
-import type { Episode } from '../../src/shared/types'
+import {
+  sortEpisodes,
+  sortPodcastsByShowOrder,
+  groupByPodcast,
+  nextInQueue,
+  previousInQueue
+} from '../../src/shared/queueView'
+import type { Episode, Podcast } from '../../src/shared/types'
 
 function episode(overrides: Partial<Episode> = {}): Episode {
   return {
@@ -17,6 +23,24 @@ function episode(overrides: Partial<Episode> = {}): Episode {
     ...overrides
   }
 }
+
+describe('show order', () => {
+  const podcast = (id: string): Podcast => ({ id }) as Podcast
+
+  it('ranks podcasts by showOrder, appending unranked ones in subscription order', () => {
+    const podcasts = ['p1', 'p2', 'p3', 'p4'].map(podcast)
+    expect(sortPodcastsByShowOrder(podcasts, ['p3', 'p1']).map((p) => p.id)).toEqual(['p3', 'p1', 'p2', 'p4'])
+  })
+
+  it("sorts episodes by their show's rank, then oldest first", () => {
+    const ordered = sortPodcastsByShowOrder(['p1', 'p2'].map(podcast), ['p2', 'p1'])
+    const a = episode({ id: 'a', podcastId: 'p1', pubDateIso: '2026-01-01T00:00:00.000Z' })
+    const b = episode({ id: 'b', podcastId: 'p2', pubDateIso: '2026-01-05T00:00:00.000Z' })
+    const c = episode({ id: 'c', podcastId: 'p2', pubDateIso: '2026-01-02T00:00:00.000Z' })
+    const d = episode({ id: 'd', podcastId: 'gone', pubDateIso: '2025-01-01T00:00:00.000Z' })
+    expect(sortEpisodes([a, b, c, d], 'show', ordered).map((e) => e.id)).toEqual(['c', 'b', 'a', 'd'])
+  })
+})
 
 describe('sortEpisodes', () => {
   it('leaves manual order untouched', () => {

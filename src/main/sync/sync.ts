@@ -135,7 +135,9 @@ function descriptors(snapshot: PersistedData): TableDescriptor[] {
       snapshot.queuePrefs = {
         sortMode,
         groupByShow: Boolean(row.group_by_show),
-        queueView: row.queue_view === 'grid' ? 'grid' : 'list'
+        queueView: row.queue_view === 'grid' ? 'grid' : 'list',
+        // Not a synced column — keep this device's show ranking.
+        showOrder: snapshot.queuePrefs?.showOrder
       }
     },
     onPlaybackPositionRow: (row: PlaybackPositionRow) => {

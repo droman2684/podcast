@@ -1,5 +1,6 @@
 import { Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward } from 'lucide-react'
 import { useAppStore } from '@renderer/state/store'
+import { getEffectiveQueue } from '@renderer/utils/queueOrder'
 import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
 import ProgressBar from '@renderer/components/ui/ProgressBar'
 import SectionLabel from '@renderer/components/ui/SectionLabel'
@@ -13,7 +14,8 @@ const SKIP_SECONDS = 30
 function NowPlayingPanel(): React.JSX.Element {
   const podcasts = useAppStore((s) => s.podcasts)
   const episodesByPodcast = useAppStore((s) => s.episodesByPodcast)
-  const queue = useAppStore((s) => s.queue)
+  // Playback order (the chosen sort, or manual) — see getEffectiveQueue.
+  const queue = useAppStore(getEffectiveQueue)
   const currentEpisodeId = useAppStore((s) => s.currentEpisodeId)
   const playing = useAppStore((s) => s.playing)
   const currentTimeSec = useAppStore((s) => s.currentTimeSec)

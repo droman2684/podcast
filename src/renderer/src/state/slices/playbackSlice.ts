@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand'
 import type { Speed } from '@renderer/types'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
+import { getEffectiveQueue } from '@renderer/utils/queueOrder'
 import type { AppState } from '../store'
 
 const SPEEDS: Speed[] = [1.0, 1.5, 2.0, 0.75]
@@ -96,13 +97,13 @@ export const createPlaybackSlice: StateCreator<AppState, [], [], PlaybackSlice> 
   // the queue (unlike playNext(), which is the auto-advance-on-completion
   // path and does consume the front of the queue).
   playNextInQueue: () => {
-    const { queue, currentEpisodeId } = get()
-    const targetId = nextInQueue(queue, currentEpisodeId)
+    const { currentEpisodeId } = get()
+    const targetId = nextInQueue(getEffectiveQueue(get()), currentEpisodeId)
     if (targetId) get().loadEpisode(targetId, { autoplay: true })
   },
   playPreviousInQueue: () => {
-    const { queue, currentEpisodeId } = get()
-    const targetId = previousInQueue(queue, currentEpisodeId)
+    const { currentEpisodeId } = get()
+    const targetId = previousInQueue(getEffectiveQueue(get()), currentEpisodeId)
     if (targetId) get().loadEpisode(targetId, { autoplay: true })
   },
 

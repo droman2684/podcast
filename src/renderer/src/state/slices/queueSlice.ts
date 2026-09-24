@@ -2,6 +2,7 @@ import type { StateCreator } from 'zustand'
 import type { QueueView } from '@renderer/types'
 import { DEFAULT_QUEUE_PREFS, type QueueSortMode } from '@shared/queueView'
 import type { AppState } from '../store'
+import { getEffectiveQueue } from '@renderer/utils/queueOrder'
 
 export interface QueueSlice {
   queue: string[] // episodeIds
@@ -10,6 +11,10 @@ export interface QueueSlice {
   queueView: QueueView
   queueSortMode: QueueSortMode
   queueGroupByShow: boolean
+  // The user's ranking of their shows (podcast ids, first = top). Drives the
+  // Library's order and the 'show' queue sort. Device-local (see QueuePrefs).
+  showOrder: string[]
+  showOrderModalOpen: boolean
   loadQueue: () => Promise<void>
   loadQueuePrefs: () => Promise<void>
   addToQueue: (episodeId: string) => void
@@ -22,6 +27,9 @@ export interface QueueSlice {
   setQueueView: (v: QueueView) => void
   setQueueSortMode: (mode: QueueSortMode) => void
   setQueueGroupByShow: (v: boolean) => void
+  setShowOrder: (podcastIds: string[]) => void
+  openShowOrderModal: () => void
+  closeShowOrderModal: () => void
 }
 
 function persistQueue(queue: string[]): void {
@@ -29,11 +37,12 @@ function persistQueue(queue: string[]): void {
 }
 
 function persistPrefs(get: () => AppState): void {
-  const { queueSortMode, queueGroupByShow, queueView } = get()
+  const { queueSortMode, queueGroupByShow, queueView, showOrder } = get()
   window.api.queue.setPrefs({
     sortMode: queueSortMode,
     groupByShow: queueGroupByShow,
-    queueView
+    queueView,
+    showOrder
   })
 }
 
@@ -44,6 +53,8 @@ export const createQueueSlice: StateCreator<AppState, [], [], QueueSlice> = (set
   queueView: DEFAULT_QUEUE_PREFS.queueView,
   queueSortMode: DEFAULT_QUEUE_PREFS.sortMode,
   queueGroupByShow: DEFAULT_QUEUE_PREFS.groupByShow,
+  showOrder: [],
+  showOrderModalOpen: false,
 
   loadQueue: async () => {
     const queue = await window.api.queue.get()
@@ -56,7 +67,8 @@ export const createQueueSlice: StateCreator<AppState, [], [], QueueSlice> = (set
     set({
       queueSortMode: prefs.sortMode,
       queueGroupByShow: prefs.groupByShow,
-      queueView: prefs.queueView
+      queueView: prefs.queueView,
+      showOrder: prefs.showOrder ?? []
     })
   },
 
@@ -115,7 +127,15 @@ export const createQueueSlice: StateCreator<AppState, [], [], QueueSlice> = (set
     persistPrefs(get)
   },
 
+  // Switching to manual snapshots the order that was on screen (and playing)
+  // as the stored queue, so nothing visibly jumps.
   setQueueSortMode: (mode) => {
+    const state = get()
+    if (state.queueSortMode === mode) return
+    if (mode === 'manual') {
+      const sorted = getEffectiveQueue(state)
+      if (sorted.some((id, i) => id !== state.queue[i])) state.setQueueDirect(sorted)
+    }
     set({ queueSortMode: mode })
     persistPrefs(get)
   },
@@ -123,5 +143,13 @@ export const createQueueSlice: StateCreator<AppState, [], [], QueueSlice> = (set
   setQueueGroupByShow: (v) => {
     set({ queueGroupByShow: v })
     persistPrefs(get)
-  }
+  },
+
+  setShowOrder: (podcastIds) => {
+    set({ showOrder: podcastIds })
+    persistPrefs(get)
+  },
+
+  openShowOrderModal: () => set({ showOrderModalOpen: true }),
+  closeShowOrderModal: () => set({ showOrderModalOpen: false })
 })

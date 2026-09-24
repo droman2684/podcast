@@ -230,7 +230,12 @@ export function normalize(parsed: PersistedData): PersistedData {
     QUEUE_SORT_MODES.includes(prefs.sortMode) &&
     typeof prefs.groupByShow === 'boolean' &&
     (prefs.queueView === 'grid' || prefs.queueView === 'list')
-      ? prefs
+      ? {
+          ...prefs,
+          showOrder: Array.isArray(prefs.showOrder)
+            ? prefs.showOrder.filter((id): id is string => typeof id === 'string')
+            : undefined
+        }
       : null
 
   // Self-heals stale queue entries left behind by a since-fixed unsubscribe

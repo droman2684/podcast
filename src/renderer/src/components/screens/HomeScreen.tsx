@@ -1,5 +1,6 @@
 import { Play, Pause, ListPlus, X, Check } from 'lucide-react'
 import { useAppStore } from '@renderer/state/store'
+import { getEffectiveQueue } from '@renderer/utils/queueOrder'
 import EpisodeArtwork from '@renderer/components/ui/EpisodeArtwork'
 import PodcastArtwork from '@renderer/components/ui/PodcastArtwork'
 import Pill from '@renderer/components/ui/Pill'
@@ -16,7 +17,8 @@ function HomeScreen(): React.JSX.Element {
   const playing = useAppStore((s) => s.playing)
   const loadEpisode = useAppStore((s) => s.loadEpisode)
   const togglePlay = useAppStore((s) => s.togglePlay)
-  const queue = useAppStore((s) => s.queue)
+  // Playback order (the chosen sort, or manual) — see getEffectiveQueue.
+  const queue = useAppStore(getEffectiveQueue)
   const addToQueue = useAppStore((s) => s.addToQueue)
   const removeFromQueue = useAppStore((s) => s.removeFromQueue)
   const playFromQueue = useAppStore((s) => s.playFromQueue)

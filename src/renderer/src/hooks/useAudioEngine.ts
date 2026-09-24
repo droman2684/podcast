@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useAppStore } from '@renderer/state/store'
 import type { Episode } from '@renderer/types'
 import { nextInQueue } from '@shared/queueView'
+import { getEffectiveQueue } from '@renderer/utils/queueOrder'
 
 const SAVE_POSITION_INTERVAL_MS = 5000
 
@@ -98,7 +99,8 @@ export function useAudioEngine(): React.RefObject<HTMLAudioElement | null> {
         // Figure out what comes next — the episode directly below the one
         // that just finished — before removing it from the queue, since
         // removal shifts every subsequent index down by one.
-        const nextId = nextInQueue(state.queue, state.currentEpisodeId)
+        // Uses the order the queue plays in (the chosen sort, or manual).
+        const nextId = nextInQueue(getEffectiveQueue(state), state.currentEpisodeId)
         // Only a fully-finished episode is auto-removed from the queue — playing
         // one (including out of order) never removes it on its own.
         state.removeFromQueue(state.currentEpisodeId)
