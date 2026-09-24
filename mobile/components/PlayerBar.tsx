@@ -3,6 +3,7 @@ import { View, Text, Pressable, StyleSheet } from 'react-native'
 import { Play, Pause, ChevronUp, RotateCcw, RotateCw, SkipBack, SkipForward } from 'lucide-react-native'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
 import { useStore } from '../state/store'
+import { getEffectiveQueue } from '../lib/queueOrder'
 import { buildEpisodeIndex } from '../lib/episodeIndex'
 import { useScrubBar } from '../lib/useScrubBar'
 import Artwork from './Artwork'
@@ -53,7 +54,8 @@ export default function PlayerBar({ onOpen }: Props): React.JSX.Element | null {
   const setPlaybackRate = useStore((s) => s.setPlaybackRate)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
-  const queue = useStore((s) => s.queue)
+  // Effective (auto-sorted or manual) order — see lib/queueOrder.ts.
+  const queue = useStore(getEffectiveQueue)
   const stationQueue = useStore((s) => s.stationQueue)
   const queueSource = useStore((s) => s.queueSource)
   const playNextInQueue = useStore((s) => s.playNextInQueue)

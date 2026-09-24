@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react'
 import { View, Text, TextInput, FlatList, ScrollView, Pressable, Alert, StyleSheet, ActivityIndicator } from 'react-native'
-import { Grid2x2, List, Tags, ChevronRight, Settings, MoreVertical, Lock, Search, X } from 'lucide-react-native'
+import { Grid2x2, List, Tags, ChevronRight, Settings, MoreVertical, Lock, Search, X, ArrowUpDown } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
+import { sortPodcastsByShowOrder } from '../lib/queueOrder'
 import Artwork from '../components/Artwork'
 import SwipeToDelete from '../components/SwipeToDelete'
 import { colors, radii, cardShadow } from '../theme'
@@ -26,6 +27,7 @@ interface Props {
   onOpenSettings: (id: string) => void
   onOpenAppSettings: () => void
   onManageStations: () => void
+  onEditShowOrder: () => void
   onRetryPrivateFeed: (feedId: string) => void
   /** iPad SplitView only — shows the selection ring (spec §6) on whichever
    * podcast is open in the detail pane. Always null on phone, where there's
@@ -38,10 +40,15 @@ export default function LibraryScreen({
   onOpenSettings,
   onOpenAppSettings,
   onManageStations,
+  onEditShowOrder,
   onRetryPrivateFeed,
   selectedPodcastId = null
 }: Props): React.JSX.Element {
-  const podcasts = useStore((s) => s.podcasts)
+  const allPodcasts = useStore((s) => s.podcasts)
+  const showOrder = useStore((s) => s.showOrder)
+  // The user's show ranking (Show Order screen) — also what the Queue's
+  // Auto mode sorts by, so the Library reads top-to-bottom the same way.
+  const podcasts = useMemo(() => sortPodcastsByShowOrder(allPodcasts, showOrder), [allPodcasts, showOrder])
   const loading = useStore((s) => s.libraryLoading)
   const error = useStore((s) => s.libraryError)
   const loadLibrary = useStore((s) => s.loadLibrary)
@@ -255,10 +262,16 @@ export default function LibraryScreen({
               <Tags size={14} color={view === 'station' ? colors.accent : colors.textPlaceholder} />
             </Pressable>
           </View>
-          <Pressable style={styles.manageBtn} onPress={onManageStations}>
-            <Tags size={13} color={colors.accent} />
-            <Text style={styles.manageLink}>Stations</Text>
-          </Pressable>
+          <View style={styles.toolbarActions}>
+            <Pressable style={styles.manageBtn} onPress={onEditShowOrder} accessibilityLabel="Edit show order">
+              <ArrowUpDown size={13} color={colors.accent} />
+              <Text style={styles.manageLink}>Order</Text>
+            </Pressable>
+            <Pressable style={styles.manageBtn} onPress={onManageStations}>
+              <Tags size={13} color={colors.accent} />
+              <Text style={styles.manageLink}>Stations</Text>
+            </Pressable>
+          </View>
         </View>
       )}
       {error && <Text style={styles.error}>{error}</Text>}
@@ -366,6 +379,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: SCREEN_PADDING,
     marginBottom: 16
   },
+  toolbarActions: { flexDirection: 'row', gap: 8 },
   manageBtn: {
     flexDirection: 'row',
     alignItems: 'center',

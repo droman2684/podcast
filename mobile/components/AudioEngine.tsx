@@ -5,6 +5,7 @@ import { nextInQueue } from '@shared/queueView'
 import { useStore } from '../state/store'
 import { removeFromQueueOnFinish } from '../lib/queueHelpers'
 import { buildEpisodeIndex } from '../lib/episodeIndex'
+import { getEffectiveQueue } from '../lib/queueOrder'
 import { getPrivateFeedCredential, basicAuthHeader, resolvePrivateStreamUrl } from '../lib/privateFeedCredentials'
 
 const SAVE_INTERVAL_MS = 3000
@@ -423,7 +424,8 @@ export default function AudioEngine(): null {
             removeFromStationQueue(episode.id)
             return id
           })()
-        : removeFromQueueOnFinish(queue, episode.id, removeFromQueue)
+        : // The order the queue actually plays in (auto or manual).
+          removeFromQueueOnFinish(getEffectiveQueue(useStore.getState()), episode.id, removeFromQueue)
     // Default-on: a downloaded episode's local file is only useful until
     // it's been listened to, so free the space automatically once it's done
     // rather than leaving finished downloads sitting on disk indefinitely.

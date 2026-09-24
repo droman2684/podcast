@@ -20,6 +20,7 @@ import {
 import type { Episode, Podcast } from '@shared/types'
 import { groupByPodcast } from '@shared/queueView'
 import { useStore } from '../state/store'
+import { getEffectiveQueue } from '../lib/queueOrder'
 import Artwork from '../components/Artwork'
 import DownloadProgressRing from '../components/DownloadProgressRing'
 import SwipeToDelete from '../components/SwipeToDelete'
@@ -37,6 +38,7 @@ interface Props {
   onBrowseLibrary: () => void
   onBrowseDiscover: () => void
   onOpenAppSettings: () => void
+  onEditShowOrder: () => void
   /** Omit (or 'compact') for the phone layout — episode details open in a
    * bottom-sheet Modal. 'rail'/'regular' expand the row inline instead (full-
    * width list, no separate detail pane) — see renderRow's `expanded`. */
@@ -58,10 +60,17 @@ export default function QueueScreen({
   onBrowseLibrary,
   onBrowseDiscover,
   onOpenAppSettings,
+  onEditShowOrder,
   mode = 'compact'
 }: Props): React.JSX.Element {
   const isTablet = mode !== 'compact'
-  const queue = useStore((s) => s.queue)
+  // The order the queue plays in — auto (show order, then oldest first) or
+  // manual. Every reorder below starts from this, so moving something while
+  // in auto mode keeps what the user was looking at and just applies their
+  // move on top (reorderQueue then switches to manual).
+  const queue = useStore(getEffectiveQueue)
+  const queueSortMode = useStore((s) => s.queueSortMode)
+  const setQueueSortMode = useStore((s) => s.setQueueSortMode)
   const podcasts = useStore((s) => s.podcasts)
   const episodesByPodcast = useStore((s) => s.episodesByPodcast)
   const removeFromQueue = useStore((s) => s.removeFromQueue)
@@ -495,14 +504,36 @@ export default function QueueScreen({
             </Text>
           </Pressable>
         ) : (
-          <Pressable
-            style={[styles.groupToggle, grouped && styles.groupToggleActive]}
-            onPress={() => setGrouped(!grouped)}
-          >
-            <Text style={[styles.groupToggleText, grouped && styles.groupToggleTextActive]}>
-              Group by show
-            </Text>
-          </Pressable>
+          <>
+            <View style={styles.sortToggle}>
+              {(['auto', 'manual'] as const).map((m) => (
+                <Pressable
+                  key={m}
+                  style={[styles.sortToggleBtn, queueSortMode === m && styles.sortToggleBtnActive]}
+                  onPress={() => setQueueSortMode(m)}
+                  accessibilityLabel={m === 'auto' ? 'Auto sort by show order' : 'Manual order'}
+                >
+                  <Text style={[styles.sortToggleText, queueSortMode === m && styles.sortToggleTextActive]}>
+                    {m === 'auto' ? 'Auto' : 'Manual'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {queueSortMode === 'auto' && (
+              <Pressable hitSlop={8} onPress={onEditShowOrder} accessibilityLabel="Edit show order">
+                <Text style={styles.selectLink}>Show order</Text>
+              </Pressable>
+            )}
+            <View style={{ flex: 1 }} />
+            <Pressable
+              style={[styles.groupToggle, grouped && styles.groupToggleActive]}
+              onPress={() => setGrouped(!grouped)}
+            >
+              <Text style={[styles.groupToggleText, grouped && styles.groupToggleTextActive]}>
+                {isTablet ? 'Group by show' : 'Group'}
+              </Text>
+            </Pressable>
+          </>
         )}
         {items.length > 0 && (
           <Pressable hitSlop={10} onPress={toggleSelecting} accessibilityLabel={selecting ? 'Cancel selecting' : 'Select episodes'}>
@@ -617,7 +648,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',
-    gap: 14,
+    gap: 12,
     paddingHorizontal: 20,
     marginBottom: 16
   },
@@ -632,6 +663,11 @@ const styles = StyleSheet.create({
   groupToggleText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
   groupToggleTextActive: { color: '#fff' },
   selectLink: { fontSize: 13, fontWeight: '600', color: colors.accent },
+  sortToggle: { flexDirection: 'row', backgroundColor: '#e8e8ed', borderRadius: 8, padding: 3, gap: 2 },
+  sortToggleBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
+  sortToggleBtnActive: { backgroundColor: '#fff', ...cardShadow },
+  sortToggleText: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
+  sortToggleTextActive: { color: colors.accent },
   selectionBar: {
     flexDirection: 'row',
     alignItems: 'center',

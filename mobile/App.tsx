@@ -14,6 +14,7 @@ import SettingsScreen from './screens/SettingsScreen'
 import StationsScreen from './screens/StationsScreen'
 import StationDetailScreen from './screens/StationDetailScreen'
 import PrivateFeedScreen from './screens/PrivateFeedScreen'
+import ShowOrderScreen from './screens/ShowOrderScreen'
 import TabBar, { type Tab } from './components/TabBar'
 import Sidebar from './components/Sidebar'
 import AudioEngine from './components/AudioEngine'
@@ -33,6 +34,7 @@ type Route =
   | { name: 'stations' }
   | { name: 'stationDetail'; stationId: string }
   | { name: 'privateFeed'; retryFeedId?: string }
+  | { name: 'showOrder' }
 
 export default function App(): React.JSX.Element {
   const authLoading = useStore((s) => s.authLoading)
@@ -163,6 +165,7 @@ export default function App(): React.JSX.Element {
   const goToStationDetail = (stationId: string): void => setRoute({ name: 'stationDetail', stationId })
   const goToAddPrivateFeed = (): void => setRoute({ name: 'privateFeed' })
   const goToRetryPrivateFeed = (retryFeedId: string): void => setRoute({ name: 'privateFeed', retryFeedId })
+  const goToShowOrder = (): void => setRoute({ name: 'showOrder' })
 
   // Opens the Player screen for an episode. Only (re)loads it into the
   // global engine if it isn't already the current one — re-opening the
@@ -203,6 +206,7 @@ export default function App(): React.JSX.Element {
           onOpenSettings={openSettings}
           onOpenAppSettings={goToAppSettings}
           onManageStations={goToStations}
+          onEditShowOrder={goToShowOrder}
         onRetryPrivateFeed={goToRetryPrivateFeed}
         />
       )
@@ -215,6 +219,7 @@ export default function App(): React.JSX.Element {
           onBrowseLibrary={() => selectTab('library')}
           onBrowseDiscover={() => selectTab('discover')}
           onOpenAppSettings={goToAppSettings}
+          onEditShowOrder={goToShowOrder}
           mode={isTablet ? mode : undefined}
         />
       )
@@ -234,6 +239,7 @@ export default function App(): React.JSX.Element {
         onOpenSettings={openSettings}
         onOpenAppSettings={goToAppSettings}
         onManageStations={goToStations}
+        onEditShowOrder={goToShowOrder}
         onRetryPrivateFeed={goToRetryPrivateFeed}
       />
     )
@@ -247,6 +253,7 @@ export default function App(): React.JSX.Element {
         onOpenSettings={openSettings}
         onOpenAppSettings={goToAppSettings}
         onManageStations={goToStations}
+        onEditShowOrder={goToShowOrder}
         onRetryPrivateFeed={goToRetryPrivateFeed}
       />
     )
@@ -266,6 +273,10 @@ export default function App(): React.JSX.Element {
     ) : (
       <StationsScreen onBack={goToTabs} onOpenStation={goToStationDetail} />
     )
+  } else if (route.name === 'showOrder') {
+    // Back returns to whichever tab opened it (Queue's "Show order" link or
+    // Library's "Order" button) — `tab` is still set to that tab.
+    screen = <ShowOrderScreen onBack={goToTabs} backLabel={tab === 'queue' ? 'Queue' : 'Library'} />
   } else if (route.name === 'privateFeed') {
     screen = <PrivateFeedScreen onBack={goToTabs} retryFeedId={route.retryFeedId} />
   } else {
@@ -295,6 +306,7 @@ export default function App(): React.JSX.Element {
           onOpenSettings={openSettings}
           onOpenAppSettings={goToAppSettings}
           onManageStations={goToStations}
+          onEditShowOrder={goToShowOrder}
         onRetryPrivateFeed={goToRetryPrivateFeed}
         />
       )
@@ -331,6 +343,7 @@ export default function App(): React.JSX.Element {
               onOpenSettings={openSettings}
               onOpenAppSettings={goToAppSettings}
               onManageStations={goToStations}
+              onEditShowOrder={goToShowOrder}
               onRetryPrivateFeed={goToRetryPrivateFeed}
               selectedPodcastId={selectedPodcastId}
             />

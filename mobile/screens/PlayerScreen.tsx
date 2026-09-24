@@ -5,6 +5,7 @@ import { ChevronDown, Play, Pause, RotateCcw, RotateCw, SkipBack, SkipForward, M
 import type { Chapter, Episode, Podcast } from '@shared/types'
 import { nextInQueue, previousInQueue } from '@shared/queueView'
 import { useStore } from '../state/store'
+import { getEffectiveQueue } from '../lib/queueOrder'
 import Artwork from '../components/Artwork'
 import { stripHtml } from '../lib/stripHtml'
 import { useScrubBar } from '../lib/useScrubBar'
@@ -62,7 +63,8 @@ export default function PlayerScreen({ episode, podcast, onBack, mode = 'compact
   const togglePlay = useStore((s) => s.togglePlay)
   const requestSeek = useStore((s) => s.requestSeek)
   const setPlaybackRate = useStore((s) => s.setPlaybackRate)
-  const queue = useStore((s) => s.queue)
+  // Effective (auto-sorted or manual) order — see lib/queueOrder.ts.
+  const queue = useStore(getEffectiveQueue)
   const stationQueue = useStore((s) => s.stationQueue)
   const queueSource = useStore((s) => s.queueSource)
   const podcasts = useStore((s) => s.podcasts)

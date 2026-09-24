@@ -25,6 +25,7 @@ import { createMobileAdapters } from '../lib/syncAdapters'
 import { parseFeed } from '../lib/rss'
 import { downloadEpisode as downloadEpisodeFile, deleteDownload, listDownloadedUris } from '../lib/downloads'
 import { hashId } from '../lib/hash'
+import { getEffectiveQueue, type QueueSortMode } from '../lib/queueOrder'
 import { DEFAULT_DISCOVER_CATEGORIES } from '../lib/itunes'
 import { computeStationEpisodes } from '../lib/stationEpisodes'
 import {
@@ -48,6 +49,8 @@ interface LocalSettings {
   defaultLibraryView: LibraryView
   queueGroupedByShow: boolean
   discoverCategories: string[]
+  queueSortMode: QueueSortMode
+  showOrder: string[]
 }
 
 const DEFAULT_SETTINGS: LocalSettings = {
@@ -55,7 +58,9 @@ const DEFAULT_SETTINGS: LocalSettings = {
   skipForwardSec: 30,
   defaultLibraryView: 'grid',
   queueGroupedByShow: false,
-  discoverCategories: DEFAULT_DISCOVER_CATEGORIES
+  discoverCategories: DEFAULT_DISCOVER_CATEGORIES,
+  queueSortMode: 'auto',
+  showOrder: []
 }
 
 async function saveSettings(settings: LocalSettings): Promise<void> {
@@ -480,12 +485,26 @@ interface AppState {
   // LocalSettings, editable from Settings (add from CATEGORY_GENRE_IDS,
   // remove down to a minimum of one so Discover never has zero chips).
   discoverCategories: string[]
+  // How the Queue tab orders (and plays through) the queue. 'auto' derives
+  // the order from `showOrder` then oldest-episode-first (see
+  // lib/queueOrder.ts) without rewriting the synced `queue` itself, so two
+  // devices can't fight over re-sorting it; 'manual' is the stored order.
+  // Device-local, like the rest of LocalSettings.
+  queueSortMode: QueueSortMode
+  // The user's ranking of their shows (podcast ids, first = top). Drives the
+  // Library's order and auto queue order. Shows not listed (subscribed since
+  // it was last edited) follow in subscription order.
+  showOrder: string[]
   settingsLoaded: boolean
   loadSettings: () => Promise<void>
   setSkipBackSec: (sec: number) => void
   setSkipForwardSec: (sec: number) => void
   setDefaultLibraryView: (view: LibraryView) => void
   setQueueGroupedByShow: (grouped: boolean) => void
+  // Switching auto -> manual snapshots the current auto order as the manual
+  // queue, so nothing visibly jumps.
+  setQueueSortMode: (mode: QueueSortMode) => void
+  setShowOrder: (podcastIds: string[]) => void
   addDiscoverCategory: (category: string) => void
   removeDiscoverCategory: (category: string) => void
 
@@ -780,6 +799,27 @@ export const useStore = create<AppState>((set, get) => {
     if (nextStations) saveLocalStations(nextStations).catch(() => {})
   }
 
+  const persistSettings = (): void => {
+    const {
+      skipBackSec,
+      skipForwardSec,
+      defaultLibraryView,
+      queueGroupedByShow,
+      discoverCategories,
+      queueSortMode,
+      showOrder
+    } = get()
+    void saveSettings({
+      skipBackSec,
+      skipForwardSec,
+      defaultLibraryView,
+      queueGroupedByShow,
+      discoverCategories,
+      queueSortMode,
+      showOrder
+    })
+  }
+
   return {
   authLoading: true,
   authError: null,
@@ -818,6 +858,8 @@ export const useStore = create<AppState>((set, get) => {
   defaultLibraryView: DEFAULT_SETTINGS.defaultLibraryView,
   queueGroupedByShow: DEFAULT_SETTINGS.queueGroupedByShow,
   discoverCategories: DEFAULT_SETTINGS.discoverCategories,
+  queueSortMode: DEFAULT_SETTINGS.queueSortMode,
+  showOrder: DEFAULT_SETTINGS.showOrder,
   settingsLoaded: false,
 
   loadCachedPositions: async () => {
@@ -885,6 +927,8 @@ export const useStore = create<AppState>((set, get) => {
           saved.discoverCategories && saved.discoverCategories.length > 0
             ? saved.discoverCategories
             : DEFAULT_SETTINGS.discoverCategories,
+        queueSortMode: saved.queueSortMode === 'manual' ? 'manual' : DEFAULT_SETTINGS.queueSortMode,
+        showOrder: Array.isArray(saved.showOrder) ? saved.showOrder : DEFAULT_SETTINGS.showOrder,
         settingsLoaded: true
       })
     } catch (err) {
@@ -895,26 +939,38 @@ export const useStore = create<AppState>((set, get) => {
 
   setSkipBackSec: (sec) => {
     set({ skipBackSec: sec })
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
+    persistSettings()
   },
 
   setSkipForwardSec: (sec) => {
     set({ skipForwardSec: sec })
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
+    persistSettings()
   },
 
   setDefaultLibraryView: (view) => {
     set({ defaultLibraryView: view })
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
+    persistSettings()
   },
 
   setQueueGroupedByShow: (grouped) => {
     set({ queueGroupedByShow: grouped })
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
+    persistSettings()
+  },
+
+  setQueueSortMode: (mode) => {
+    const state = get()
+    if (state.queueSortMode === mode) return
+    if (mode === 'manual') {
+      const autoOrder = getEffectiveQueue(state)
+      if (autoOrder.some((id, i) => id !== state.queue[i])) void state.reorderQueue(autoOrder)
+    }
+    set({ queueSortMode: mode })
+    persistSettings()
+  },
+
+  setShowOrder: (podcastIds) => {
+    set({ showOrder: podcastIds })
+    persistSettings()
   },
 
   // Adds to the end, ignoring a name already present (Settings' picker
@@ -922,8 +978,7 @@ export const useStore = create<AppState>((set, get) => {
   addDiscoverCategory: (category) => {
     if (get().discoverCategories.includes(category)) return
     set((state) => ({ discoverCategories: [...state.discoverCategories, category] }))
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
+    persistSettings()
   },
 
   // Never drops below one category — Discover's chip row always needs at
@@ -931,8 +986,7 @@ export const useStore = create<AppState>((set, get) => {
   removeDiscoverCategory: (category) => {
     if (get().discoverCategories.length <= 1) return
     set((state) => ({ discoverCategories: state.discoverCategories.filter((c) => c !== category) }))
-    const { skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories } = get()
-    saveSettings({ skipBackSec, skipForwardSec, defaultLibraryView, queueGroupedByShow, discoverCategories })
+    persistSettings()
   },
 
   currentEpisodeId: null,
@@ -2003,7 +2057,14 @@ export const useStore = create<AppState>((set, get) => {
     }
   },
 
+  // Any hand-reorder is a manual override: in auto mode it switches to
+  // manual (the caller passes the full new order, already based on what
+  // auto was showing), so the user's move sticks instead of being re-sorted.
   reorderQueue: async (episodeIds) => {
+    if (get().queueSortMode === 'auto') {
+      set({ queueSortMode: 'manual' })
+      persistSettings()
+    }
     set({ queue: episodeIds })
     await saveQueue(episodeIds)
   },
@@ -2280,14 +2341,14 @@ export const useStore = create<AppState>((set, get) => {
   setPlaybackRate: (rate) => set({ playbackRate: rate }),
 
   playNextInQueue: () => {
-    const { queue, stationQueue, queueSource, currentEpisodeId, loadEpisode } = get()
-    const activeQueue = queueSource === 'station' ? stationQueue : queue
+    const { stationQueue, queueSource, currentEpisodeId, loadEpisode } = get()
+    const activeQueue = queueSource === 'station' ? stationQueue : getEffectiveQueue(get())
     const nextId = nextInQueue(activeQueue, currentEpisodeId)
     if (nextId) loadEpisode(nextId, { autoplay: true })
   },
   playPreviousInQueue: () => {
-    const { queue, stationQueue, queueSource, currentEpisodeId, loadEpisode } = get()
-    const activeQueue = queueSource === 'station' ? stationQueue : queue
+    const { stationQueue, queueSource, currentEpisodeId, loadEpisode } = get()
+    const activeQueue = queueSource === 'station' ? stationQueue : getEffectiveQueue(get())
     const previousId = previousInQueue(activeQueue, currentEpisodeId)
     if (previousId) loadEpisode(previousId, { autoplay: true })
   },
