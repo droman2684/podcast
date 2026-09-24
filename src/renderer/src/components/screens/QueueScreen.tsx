@@ -338,7 +338,7 @@ function QueueScreen(): React.JSX.Element {
           </select>
 
           {sortMode === 'show' && (
-            <Pill variant="ghost" onClick={openShowOrderModal}>
+            <Pill variant="secondary" onClick={openShowOrderModal}>
               Edit show order
             </Pill>
           )}
