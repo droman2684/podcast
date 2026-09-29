@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { View, Text, Pressable, ScrollView, StyleSheet } from 'react-native'
-import { Library, Sparkles, ListOrdered } from 'lucide-react-native'
+import { Home, Library, Sparkles, ListOrdered } from 'lucide-react-native'
 import type { Episode, Podcast } from '@shared/types'
 import { useStore } from '../state/store'
 import Artwork from './Artwork'
@@ -15,6 +15,7 @@ export const RAIL_WIDTH = 88
 // Same destinations, same order, same icons as TabBar.tsx — rotating an
 // iPad shouldn't rearrange the app.
 const ITEMS: { key: Tab; label: string; Icon: typeof Library }[] = [
+  { key: 'home', label: 'Home', Icon: Home },
   { key: 'queue', label: 'Queue', Icon: ListOrdered },
   { key: 'library', label: 'Library', Icon: Library },
   { key: 'discover', label: 'Discover', Icon: Sparkles }

@@ -10,6 +10,7 @@ import PlayerScreen from './screens/PlayerScreen'
 import PodcastSettingsScreen from './screens/PodcastSettingsScreen'
 import DiscoverScreen from './screens/DiscoverScreen'
 import QueueScreen from './screens/QueueScreen'
+import HomeScreen from './screens/HomeScreen'
 import SettingsScreen from './screens/SettingsScreen'
 import StationsScreen from './screens/StationsScreen'
 import StationDetailScreen from './screens/StationDetailScreen'
@@ -64,7 +65,7 @@ export default function App(): React.JSX.Element {
   const subscribeRealtime = useStore((s) => s.subscribeRealtime)
   const unsubscribeRealtime = useStore((s) => s.unsubscribeRealtime)
 
-  const [tab, setTab] = useState<Tab>('queue')
+  const [tab, setTab] = useState<Tab>('home')
   const [route, setRoute] = useState<Route>({ name: 'tabs' })
   // Wherever the Player was opened FROM, so its back button returns there
   // instead of always assuming "the show's episode list" — e.g. opened from
@@ -208,6 +209,15 @@ export default function App(): React.JSX.Element {
           onManageStations={goToStations}
           onEditShowOrder={goToShowOrder}
         onRetryPrivateFeed={goToRetryPrivateFeed}
+        />
+      )
+    } else if (tab === 'home') {
+      screen = (
+        <HomeScreen
+          onPlay={openPlayer}
+          onSeeQueue={() => selectTab('queue')}
+          onBrowseDiscover={() => selectTab('discover')}
+          onOpenAppSettings={goToAppSettings}
         />
       )
     } else if (tab === 'discover') {
