@@ -898,14 +898,17 @@ export const useStore = create<AppState>((set, get) => {
   // merge (mergeFeed) and final sweep transparently replace/drop these
   // stubs once the real feed data lands, same as any other podcast.
   loadCachedDownloadedSnapshots: async () => {
-    const snapshots = await loadLocalDownloadedSnapshots()
+    // Played-state read directly rather than from the store: loadCachedPlayed
+    // runs concurrently at startup and may not have landed yet. A snapshot's
+    // own `played` is frozen at download time.
+    const [snapshots, localPlayed] = await Promise.all([loadLocalDownloadedSnapshots(), loadLocalPlayed()])
     const entries = Object.values(snapshots)
     if (entries.length === 0) return
     const podcastsById = new Map<string, Podcast>()
     const episodesByPodcast: Record<string, Episode[]> = {}
     for (const { episode, podcast } of entries) {
       podcastsById.set(podcast.id, podcast)
-      ;(episodesByPodcast[podcast.id] ??= []).push(episode)
+      ;(episodesByPodcast[podcast.id] ??= []).push({ ...episode, played: localPlayed[episode.id] ?? episode.played })
     }
     set({ podcasts: Array.from(podcastsById.values()), episodesByPodcast })
   },
@@ -1256,6 +1259,10 @@ export const useStore = create<AppState>((set, get) => {
       // the loop so every other device shares the advance instead of each
       // device only ever learning about episodes it personally fetched.
       const lastSeenAdvances: Record<string, string> = {}
+      // Server played values the ledger accepted below, folded into the
+      // durable localPlayed cache once after the loop so it never lags
+      // behind what's actually shown (it's consulted first on the next load).
+      const acceptedPlayed: Record<string, boolean> = {}
 
       await mapWithConcurrency(
         activeRows,
@@ -1314,10 +1321,12 @@ export const useStore = create<AppState>((set, get) => {
             // played value if it's newer than what this device already
             // recorded, otherwise keep this device's own value (an optimistic
             // setPlayed that hasn't finished uploading shouldn't get reverted
-            // by this reload). In-memory episodesByPodcast is always empty on
-            // a cold start though, so it falls back further to the durable
-            // localPlayed cache (see PLAYED_STORAGE_KEY's doc comment) before
-            // finally giving up and treating the episode as unplayed.
+            // by this reload). The durable localPlayed cache (see
+            // PLAYED_STORAGE_KEY's doc comment) is checked BEFORE in-memory
+            // episodesByPodcast: on a cold start the latter holds the
+            // downloaded-episode stubs from loadCachedDownloadedSnapshots,
+            // frozen at download time — preferring those reverted episodes
+            // marked played after downloading back to unplayed.
             const previousPlayedById = new Map(
               (get().episodesByPodcast[row.id] ?? []).map((e) => [e.id, e.played])
             )
@@ -1327,11 +1336,12 @@ export const useStore = create<AppState>((set, get) => {
               const key = `episodePlayed:${e.id}`
               if (playedRow && ledger.isNewer(key, new Date(playedRow.updated_at).getTime())) {
                 ledger.touch(key, new Date(playedRow.updated_at).getTime())
+                acceptedPlayed[e.id] = playedRow.played
                 return { ...e, played: playedRow.played }
               }
               return {
                 ...e,
-                played: previousPlayedById.get(e.id) ?? localPlayed[e.id] ?? playedRow?.played ?? false
+                played: localPlayed[e.id] ?? previousPlayedById.get(e.id) ?? playedRow?.played ?? false
               }
             })
             const podcast: Podcast = {
@@ -1448,11 +1458,15 @@ export const useStore = create<AppState>((set, get) => {
       // ledger accepted as newer. This is a redundant safety net covering
       // any other reason a podcast might be locally present but absent from
       // `activeRows`.
+      const nextLocalPlayed =
+        Object.keys(acceptedPlayed).length > 0 ? { ...get().localPlayed, ...acceptedPlayed } : null
+      if (nextLocalPlayed) saveLocalPlayed(nextLocalPlayed).catch(() => {})
       set((state) => ({
         podcasts: state.podcasts.filter((p) => rowOrder.has(p.id)),
         episodesByPodcast: Object.fromEntries(
           Object.entries(state.episodesByPodcast).filter(([id]) => rowOrder.has(id))
         ),
+        ...(nextLocalPlayed ? { localPlayed: nextLocalPlayed } : {}),
         libraryLoading: false,
         libraryLoaded: true
       }))
