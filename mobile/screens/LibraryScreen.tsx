@@ -399,18 +399,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 9,
     borderRadius: radii.pill,
-    backgroundColor: '#e8e8ed'
+    backgroundColor: colors.fill
   },
   searchInput: { flex: 1, fontSize: 14, color: colors.textPrimary, padding: 0 },
   toggle: {
     flexDirection: 'row',
-    backgroundColor: '#e8e8ed',
+    backgroundColor: colors.fill,
     borderRadius: 8,
     padding: 3,
     gap: 2
   },
   toggleBtn: { width: 28, height: 26, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
-  toggleBtnActive: { backgroundColor: '#fff', ...cardShadow },
+  toggleBtnActive: { backgroundColor: colors.segmentActive, ...cardShadow },
   error: { color: colors.danger, paddingHorizontal: SCREEN_PADDING, marginBottom: 8 },
 
   gridContent: { paddingHorizontal: SCREEN_PADDING, paddingBottom: 20 },

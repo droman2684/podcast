@@ -657,15 +657,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: radii.pill,
-    backgroundColor: '#e8e8ed'
+    backgroundColor: colors.fill
   },
   groupToggleActive: { backgroundColor: colors.accent },
   groupToggleText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
   groupToggleTextActive: { color: '#fff' },
   selectLink: { fontSize: 13, fontWeight: '600', color: colors.accent },
-  sortToggle: { flexDirection: 'row', backgroundColor: '#e8e8ed', borderRadius: 8, padding: 3, gap: 2 },
+  sortToggle: { flexDirection: 'row', backgroundColor: colors.fill, borderRadius: 8, padding: 3, gap: 2 },
   sortToggleBtn: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6 },
-  sortToggleBtnActive: { backgroundColor: '#fff', ...cardShadow },
+  sortToggleBtnActive: { backgroundColor: colors.segmentActive, ...cardShadow },
   sortToggleText: { fontSize: 12, fontWeight: '600', color: colors.textMuted },
   sortToggleTextActive: { color: colors.accent },
   selectionBar: {
@@ -731,7 +731,7 @@ const styles = StyleSheet.create({
   progressTrack: {
     height: 3,
     borderRadius: 1.5,
-    backgroundColor: '#e0e0e6',
+    backgroundColor: colors.track,
     overflow: 'hidden',
     marginTop: 6
   },

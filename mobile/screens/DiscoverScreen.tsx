@@ -326,7 +326,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: radii.pill,
-    backgroundColor: '#e8e8ed',
+    backgroundColor: colors.fill,
     marginRight: 8
   },
   chipActive: { backgroundColor: colors.accent },

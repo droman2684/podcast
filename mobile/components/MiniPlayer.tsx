@@ -77,7 +77,7 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: colors.border
   },
-  progressTrack: { height: 2, backgroundColor: '#e0e0e6' },
+  progressTrack: { height: 2, backgroundColor: colors.track },
   progressFill: { height: '100%', backgroundColor: colors.accent },
   row: {
     flexDirection: 'row',

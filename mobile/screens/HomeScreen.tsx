@@ -366,14 +366,14 @@ const styles = StyleSheet.create({
   newDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent },
   epTitle: { flex: 1, fontSize: 14, fontWeight: '600', color: colors.textPrimary },
   epSub: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-  progressTrack: { height: 3, borderRadius: 2, backgroundColor: '#e8e8ed', marginTop: 6, overflow: 'hidden' },
+  progressTrack: { height: 3, borderRadius: 2, backgroundColor: colors.fill, marginTop: 6, overflow: 'hidden' },
   progressFill: { height: 3, backgroundColor: colors.accent },
   iconBtn: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center' },
   playBtn: {
     width: 30,
     height: 30,
     borderRadius: 15,
-    backgroundColor: '#f0f0f5',
+    backgroundColor: colors.fillSubtle,
     alignItems: 'center',
     justifyContent: 'center'
   },

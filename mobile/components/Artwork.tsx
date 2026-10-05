@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Image, View, StyleSheet } from 'react-native'
+import { colors } from '../theme'
 
 interface Props {
   url: string | null
@@ -21,5 +22,5 @@ export default function Artwork({ url, size, radius = 8 }: Props): React.JSX.Ele
 }
 
 const styles = StyleSheet.create({
-  fallback: { backgroundColor: '#eee' }
+  fallback: { backgroundColor: colors.fill }
 })

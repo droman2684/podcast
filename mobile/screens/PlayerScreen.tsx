@@ -489,7 +489,7 @@ const styles = StyleSheet.create({
   bar: {
     height: 6,
     borderRadius: 3,
-    backgroundColor: '#e0e0e6',
+    backgroundColor: colors.track,
     overflow: 'hidden'
   },
   barFill: { height: '100%', backgroundColor: colors.accent },
@@ -544,7 +544,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 14,
     paddingVertical: 8,
-    backgroundColor: '#e8e8ed',
+    backgroundColor: colors.fill,
     borderRadius: radii.pill
   },
   sleepBtnActive: { backgroundColor: colors.accent },

@@ -288,7 +288,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 6,
     borderRadius: radii.pill,
-    backgroundColor: '#e8e8ed'
+    backgroundColor: colors.fill
   },
   filterBtnActive: { backgroundColor: colors.accent },
   filterText: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },

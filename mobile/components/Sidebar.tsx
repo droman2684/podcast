@@ -241,7 +241,7 @@ const styles = StyleSheet.create({
   labelRail: { fontSize: 10.5, flex: 0 },
 
   badge: {
-    backgroundColor: '#e8e8ed',
+    backgroundColor: colors.fill,
     borderRadius: radii.badge,
     paddingHorizontal: 8,
     paddingVertical: 2

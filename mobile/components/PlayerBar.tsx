@@ -178,7 +178,7 @@ const styles = StyleSheet.create({
   scrubRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   timeText: { fontSize: 11.5, color: colors.textMuted, width: 48, textAlign: 'center' },
   scrubWrap: { flex: 1, justifyContent: 'center', height: 24 },
-  track: { height: 8, borderRadius: 4, backgroundColor: '#e0e0e6', overflow: 'hidden' },
+  track: { height: 8, borderRadius: 4, backgroundColor: colors.track, overflow: 'hidden' },
   trackFill: { height: '100%', backgroundColor: colors.accent },
   thumb: {
     position: 'absolute',
@@ -213,7 +213,7 @@ const styles = StyleSheet.create({
   speedBtn: {
     paddingHorizontal: 12,
     paddingVertical: 7,
-    backgroundColor: '#e8e8ed',
+    backgroundColor: colors.fill,
     borderRadius: radii.pill
   },
   speedText: { fontSize: 12, fontWeight: '700', color: colors.textSecondary },

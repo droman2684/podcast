@@ -19,7 +19,7 @@ export default function DownloadProgressRing({
   size = 18,
   strokeWidth = 2.5,
   color = colors.accent,
-  trackColor = '#e0e0e6'
+  trackColor = colors.track
 }: Props): React.JSX.Element {
   const radius = (size - strokeWidth) / 2
   const circumference = 2 * Math.PI * radius
